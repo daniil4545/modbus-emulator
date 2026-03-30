@@ -31,7 +31,7 @@ def _build_context(registers: list[RegisterConfig]) -> ModbusServerContext:
 
     for reg in registers:
         words = encode_value(reg.test_value, reg.format, reg.reg_size)
-        blocks[reg.reg_type].setValues(reg.address, words)
+        blocks[reg.reg_type].setValues(reg.address + 1, words)
 
     store = ModbusSlaveContext(di=di, co=co, hr=hr, ir=ir)
     return ModbusServerContext(slaves=store, single=True)

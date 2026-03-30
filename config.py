@@ -102,6 +102,9 @@ def encode_value(value: int | float | bool, fmt: Optional[str], reg_size: int) -
     """Кодирует test_value в список uint16 words для записи в Modbus datastore.
 
     fmt=None означает coil или discrete — кодируется как один бит (0 или 1).
+
+    Multi-register значения кодируются в big-endian word order (high word first),
+    так как go-modbus-client читает регистры в стандартном big-endian порядке.
     """
     if fmt is None:
         return [int(bool(value))]

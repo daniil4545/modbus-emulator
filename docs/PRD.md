@@ -51,7 +51,14 @@ raw = struct.pack('>I', value)                    # пример для uint32
 words = list(struct.unpack(f'>{len(raw)//2}H', raw))
 ```
 
-Регистровый блок: `ModbusSequentialDataBlock(0, [0] * 65536)` — потом записать words по нужному адресу.
+Регистровый блок: `ModbusSequentialDataBlock(0, [0] * 65536)` — потом записать words по адресу.
+
+**Важно: offset +1 в `ModbusSlaveContext`.**
+`ModbusSlaveContext.getValues` и `setValues` жёстко прибавляют `+1` к адресу внутри.
+При прямой записи в `ModbusSequentialDataBlock` (минуя контекст) нужно компенсировать:
+```python
+block.setValues(address + 1, words)  # +1 компенсирует внутренний offset ModbusSlaveContext
+```
 
 ## pymodbus API (v3.x)
 
@@ -61,7 +68,7 @@ from pymodbus.datastore import ModbusSequentialDataBlock, ModbusSlaveContext, Mo
 from pymodbus.server import ModbusTcpServer, ModbusSerialServer
 
 # Контекст для одного устройства
-store = ModbusSlaveContext(  # ModbusDeviceContext в 3.9.x называется ModbusSlaveContext
+store = ModbusSlaveContext(  # в pymodbus 3.9.2 класс называется ModbusSlaveContext; ModbusDeviceContext не существует
     di=ModbusSequentialDataBlock(0, [0] * 65536),
     co=ModbusSequentialDataBlock(0, [0] * 65536),
     hr=ModbusSequentialDataBlock(0, [0] * 65536),
