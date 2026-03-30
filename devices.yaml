@@ -1,0 +1,513 @@
+# testdata/devices_local.yaml
+# Shared config: driver (go run .) + emulator (modbus-emulator).
+# Serial device paths are rewritten by the emulator at startup via socat.
+# Field test_value: initial register value for the emulator, ignored by driver.
+# Naming: tcp_<what>, serial_<what>, rtu_<what>
+
+# =============================================================================
+# Modbus TCP devices (port_type: modbus tcp, MBAP framing)
+# =============================================================================
+
+# Holding uint — uint16, uint32, uint64
+tcp_uint:
+  port_type: modbus tcp
+  ip: 127.0.0.1
+  port: 15020
+  slave_id: 1
+  poll_time: 2
+  registers:
+    - id: u16
+      reg_type: holding
+      address: 0
+      format: uint
+      test_value: 1000
+    - id: u32
+      reg_type: holding
+      address: 1
+      reg_size: 2
+      format: uint
+      test_value: 100000
+    - id: u64
+      reg_type: holding
+      address: 3
+      reg_size: 4
+      format: uint
+      test_value: 1000000000
+
+# Holding int — int16, int32, int64
+tcp_int:
+  port_type: modbus tcp
+  ip: 127.0.0.1
+  port: 15021
+  slave_id: 2
+  poll_time: 2
+  registers:
+    - id: i16
+      reg_type: holding
+      address: 0
+      format: int
+      test_value: -1000
+    - id: i32
+      reg_type: holding
+      address: 1
+      reg_size: 2
+      format: int
+      test_value: -100000
+    - id: i64
+      reg_type: holding
+      address: 3
+      reg_size: 4
+      format: int
+      test_value: -1000000000
+
+# Holding float — float32 и float64 с truncate
+tcp_float:
+  port_type: modbus tcp
+  ip: 127.0.0.1
+  port: 15022
+  slave_id: 3
+  poll_time: 2
+  registers:
+    - id: f32
+      reg_type: holding
+      address: 0
+      reg_size: 2
+      format: float
+      truncate: 2
+      test_value: 3.14
+    - id: f64
+      reg_type: holding
+      address: 2
+      reg_size: 4
+      format: float
+      truncate: 4
+      test_value: 2.71828
+
+# Scale + truncate — raw integer × scale
+tcp_scale:
+  port_type: modbus tcp
+  ip: 127.0.0.1
+  port: 15023
+  slave_id: 4
+  poll_time: 2
+  registers:
+    - id: uint16_x001
+      reg_type: holding
+      address: 0
+      format: uint
+      scale: 0.01
+      truncate: 2
+      test_value: 1234         # raw 1234 → 1234×0.01 = "12.34"
+    - id: int16_x01
+      reg_type: holding
+      address: 1
+      format: int
+      scale: 0.1
+      truncate: 1
+      test_value: -50          # raw -50 → -50×0.1 = "-5.0"
+    - id: f32_x100
+      reg_type: holding
+      address: 2
+      reg_size: 2
+      format: float
+      scale: 100.0
+      truncate: 2
+      test_value: 0.5          # raw 0.5 → 0.5×100.0 = "50.00"
+
+# Coil (FC1) — часть writeable, часть read-only
+tcp_coil:
+  port_type: modbus tcp
+  ip: 127.0.0.1
+  port: 15024
+  slave_id: 5
+  poll_time: 2
+  registers:
+    - id: coil_rw_0
+      reg_type: coil
+      address: 0
+      writeable: true
+      test_value: 1
+    - id: coil_rw_1
+      reg_type: coil
+      address: 1
+      writeable: true
+      test_value: 0
+    - id: coil_rw_2
+      reg_type: coil
+      address: 2
+      writeable: true
+      test_value: 1
+    - id: coil_ro_3
+      reg_type: coil
+      address: 3
+      test_value: 1
+    - id: coil_ro_4
+      reg_type: coil
+      address: 4
+      test_value: 0
+    - id: coil_ro_5
+      reg_type: coil
+      address: 5
+      test_value: 1
+
+# Discrete (FC2) — read-only
+tcp_discrete:
+  port_type: modbus tcp
+  ip: 127.0.0.1
+  port: 15025
+  slave_id: 6
+  poll_time: 2
+  registers:
+    - id: disc_0
+      reg_type: discrete
+      address: 0
+      test_value: 1
+    - id: disc_1
+      reg_type: discrete
+      address: 1
+      test_value: 0
+    - id: disc_2
+      reg_type: discrete
+      address: 2
+      test_value: 1
+    - id: disc_3
+      reg_type: discrete
+      address: 3
+      test_value: 0
+    - id: disc_4
+      reg_type: discrete
+      address: 4
+      test_value: 1
+
+# Input (FC4) — uint16, int16, float32 (read-only)
+tcp_input:
+  port_type: modbus tcp
+  ip: 127.0.0.1
+  port: 15026
+  slave_id: 7
+  poll_time: 2
+  registers:
+    - id: in_u16
+      reg_type: input
+      address: 0
+      format: uint
+      test_value: 5678
+    - id: in_i16
+      reg_type: input
+      address: 1
+      format: int
+      test_value: -1234
+    - id: in_f32
+      reg_type: input
+      address: 2
+      reg_size: 2
+      format: float
+      truncate: 2
+      test_value: 1.23
+
+# Bitmap — одно holding-слово, несколько bit-полей
+# raw_word: полное значение слова; bit_N: отдельные биты
+tcp_bitmap:
+  port_type: modbus tcp
+  ip: 127.0.0.1
+  port: 15027
+  slave_id: 8
+  poll_time: 2
+  registers:
+    - id: raw_word
+      reg_type: holding
+      address: 0
+      format: uint
+      test_value: 165          # 0b10100101: bits 0,2,5,7 set
+    - id: bit_0
+      reg_type: holding
+      address: 0
+      bit: 0
+      writeable: true
+    - id: bit_1
+      reg_type: holding
+      address: 0
+      bit: 1
+      writeable: true
+    - id: bit_2
+      reg_type: holding
+      address: 0
+      bit: 2
+    - id: bit_7
+      reg_type: holding
+      address: 0
+      bit: 7
+    - id: bit_15
+      reg_type: holding
+      address: 0
+      bit: 15
+
+# Writeable — holding uint16, float32, coil
+tcp_write:
+  port_type: modbus tcp
+  ip: 127.0.0.1
+  port: 15028
+  slave_id: 9
+  poll_time: 2
+  registers:
+    - id: uint16_rw
+      reg_type: holding
+      address: 0
+      format: uint
+      writeable: true
+      test_value: 42
+    - id: f32_rw
+      reg_type: holding
+      address: 1
+      reg_size: 2
+      format: float
+      truncate: 2
+      writeable: true
+      test_value: 3.14
+    - id: coil_rw
+      reg_type: coil
+      address: 0
+      writeable: true
+      test_value: 1
+
+# Реалистичное устройство: насос — температура, обороты, уставка, статус, авария, нагрузка
+tcp_realistic:
+  port_type: modbus tcp
+  ip: 127.0.0.1
+  port: 15029
+  slave_id: 10
+  poll_time: 2
+  registers:
+    - id: temperature
+      reg_type: holding
+      address: 0
+      reg_size: 2
+      format: float
+      scale: 0.1
+      truncate: 1
+      test_value: 253.0        # raw 253.0 → 253.0×0.1 = "25.3"
+    - id: rpm
+      reg_type: holding
+      address: 2
+      format: uint
+      test_value: 1500
+    - id: setpoint
+      reg_type: holding
+      address: 3
+      format: int
+      scale: 0.1
+      truncate: 1
+      writeable: true
+      test_value: 200          # raw 200 → 200×0.1 = "20.0"
+    - id: running
+      reg_type: coil
+      address: 0
+      writeable: true
+      test_value: 1
+    - id: fault
+      reg_type: discrete
+      address: 0
+      test_value: 0
+    - id: load_pct
+      reg_type: input
+      address: 0
+      format: uint
+      test_value: 75
+
+# =============================================================================
+# Serial devices (port_type: serial, RTU framing)
+# Paths are rewritten by the emulator at startup via socat.
+# =============================================================================
+
+# Holding uint/int/float + input — transport test
+serial_holding:
+  port_type: serial
+  path: /dev/ttyPlaceholder
+  baud_rate: 9600
+  parity: N
+  data_bits: 8
+  stop_bits: 1
+  slave_id: 11
+  poll_time: 3
+  registers:
+    - id: u16
+      reg_type: holding
+      address: 0
+      format: uint
+      test_value: 2000
+    - id: i16
+      reg_type: holding
+      address: 1
+      format: int
+      test_value: -200
+    - id: f32
+      reg_type: holding
+      address: 2
+      reg_size: 2
+      format: float
+      truncate: 2
+      test_value: 1.41
+    - id: in_u16
+      reg_type: input
+      address: 0
+      format: uint
+      test_value: 3000
+
+# Coil + discrete по serial
+serial_coil_discrete:
+  port_type: serial
+  path: /dev/ttyPlaceholder
+  baud_rate: 9600
+  parity: N
+  data_bits: 8
+  stop_bits: 1
+  slave_id: 12
+  poll_time: 3
+  registers:
+    - id: coil_rw_0
+      reg_type: coil
+      address: 0
+      writeable: true
+      test_value: 1
+    - id: coil_rw_1
+      reg_type: coil
+      address: 1
+      writeable: true
+      test_value: 0
+    - id: coil_ro_2
+      reg_type: coil
+      address: 2
+      test_value: 1
+    - id: disc_0
+      reg_type: discrete
+      address: 0
+      test_value: 1
+    - id: disc_1
+      reg_type: discrete
+      address: 1
+      test_value: 0
+
+# Bitmap + writeable по serial
+serial_bitmap_write:
+  port_type: serial
+  path: /dev/ttyPlaceholder
+  baud_rate: 9600
+  parity: N
+  data_bits: 8
+  stop_bits: 1
+  slave_id: 13
+  poll_time: 3
+  registers:
+    - id: raw_word
+      reg_type: holding
+      address: 0
+      format: uint
+      test_value: 90           # 0b01011010: bits 1,3,4,6 set
+    - id: bit_0
+      reg_type: holding
+      address: 0
+      bit: 0
+      writeable: true
+    - id: bit_1
+      reg_type: holding
+      address: 0
+      bit: 1
+      writeable: true
+    - id: bit_7
+      reg_type: holding
+      address: 0
+      bit: 7
+    - id: u16_rw
+      reg_type: holding
+      address: 1
+      format: uint
+      writeable: true
+      test_value: 999
+
+# =============================================================================
+# RTU-over-TCP devices (port_type: tcp, raw RTU framing over TCP socket)
+# =============================================================================
+
+# Holding uint/int/float + input — transport test
+rtu_holding:
+  port_type: tcp
+  ip: 127.0.0.1
+  port: 15030
+  slave_id: 14
+  poll_time: 3
+  registers:
+    - id: u16
+      reg_type: holding
+      address: 0
+      format: uint
+      test_value: 3000
+    - id: i16
+      reg_type: holding
+      address: 1
+      format: int
+      test_value: -300
+    - id: f32
+      reg_type: holding
+      address: 2
+      reg_size: 2
+      format: float
+      truncate: 2
+      test_value: 2.72
+    - id: in_u16
+      reg_type: input
+      address: 0
+      format: uint
+      test_value: 4000
+
+# Coil + discrete по RTU-over-TCP
+rtu_coil_discrete:
+  port_type: tcp
+  ip: 127.0.0.1
+  port: 15031
+  slave_id: 15
+  poll_time: 3
+  registers:
+    - id: coil_rw_0
+      reg_type: coil
+      address: 0
+      writeable: true
+      test_value: 1
+    - id: coil_ro_1
+      reg_type: coil
+      address: 1
+      test_value: 0
+    - id: disc_0
+      reg_type: discrete
+      address: 0
+      test_value: 1
+    - id: disc_1
+      reg_type: discrete
+      address: 1
+      test_value: 0
+
+# Bitmap по RTU-over-TCP
+rtu_bitmap:
+  port_type: tcp
+  ip: 127.0.0.1
+  port: 15032
+  slave_id: 16
+  poll_time: 3
+  registers:
+    - id: raw_word
+      reg_type: holding
+      address: 0
+      format: uint
+      test_value: 85           # 0b01010101: bits 0,2,4,6 set
+    - id: bit_0
+      reg_type: holding
+      address: 0
+      bit: 0
+      writeable: true
+    - id: bit_2
+      reg_type: holding
+      address: 0
+      bit: 2
+    - id: bit_6
+      reg_type: holding
+      address: 0
+      bit: 6
