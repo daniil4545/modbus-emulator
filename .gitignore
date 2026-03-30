@@ -16,5 +16,8 @@ build/
 .vscode/
 .idea/
 
+# Generated at runtime by emulator (serial PTY paths)
+devices_patched.yaml
+
 # OS
 .DS_Store
