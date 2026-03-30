@@ -10,7 +10,7 @@
 
 | `port_type` в config | pymodbus класс | Framer |
 |---|---|---|
-| `modbus tcp` | `ModbusTcpServer` | `FramerType.TCP` |
+| `modbus tcp` | `ModbusTcpServer` | `FramerType.SOCKET` |
 | `tcp` | `ModbusTcpServer` | `FramerType.RTU` (RTU-over-TCP) |
 | `serial` | `ModbusSerialServer` | `FramerType.RTU` + os.openpty() |
 
@@ -57,11 +57,11 @@ words = list(struct.unpack(f'>{len(raw)//2}H', raw))
 
 ```python
 from pymodbus import FramerType
-from pymodbus.datastore import ModbusSequentialDataBlock, ModbusDeviceContext, ModbusServerContext
+from pymodbus.datastore import ModbusSequentialDataBlock, ModbusSlaveContext, ModbusServerContext
 from pymodbus.server import ModbusTcpServer, ModbusSerialServer
 
 # Контекст для одного устройства
-store = ModbusDeviceContext(
+store = ModbusSlaveContext(  # ModbusDeviceContext в 3.9.x называется ModbusSlaveContext
     di=ModbusSequentialDataBlock(0, [0] * 65536),
     co=ModbusSequentialDataBlock(0, [0] * 65536),
     hr=ModbusSequentialDataBlock(0, [0] * 65536),
@@ -70,7 +70,7 @@ store = ModbusDeviceContext(
 context = ModbusServerContext(slaves=store, single=True)
 
 # Modbus TCP (MBAP)
-server = ModbusTcpServer(context, address=("0.0.0.0", port), framer=FramerType.TCP)
+server = ModbusTcpServer(context, address=("0.0.0.0", port), framer=FramerType.SOCKET)
 
 # RTU-over-TCP
 server = ModbusTcpServer(context, address=("0.0.0.0", port), framer=FramerType.RTU)
