@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import yaml
@@ -22,10 +23,10 @@ class ObservableDataBlock(ModbusSequentialDataBlock):
     _on_write=None во время инициализации — init-записи молчат.
     Устанавливается после того, как все стартовые значения записаны.
     """
+    _on_write: Callable[[int, list], None] | None = None
 
     def __init__(self, address, values):
         super().__init__(address, values)
-        self._on_write = None
 
     def setValues(self, address, values):
         super().setValues(address, values)
@@ -140,10 +141,9 @@ def build_all(devices: list[DeviceConfig], config_path: str) -> ServerSetup:
                 run_device_sim(device.name, device.registers, blocks, device.sim_tick)
             )
 
-    if serial_paths:
-        patched_path = _write_patched_config(serial_paths, config_path)
-        print(f"\n[emulator] devices_patched.yaml written. Run driver with:")
-        print(f"  go run . --config {os.path.abspath(patched_path)}")
+    patched_path = _write_patched_config(serial_paths, config_path)
+    print("\n[emulator] Run driver with:")
+    print(f"  go run . --config {os.path.abspath(patched_path)}")
 
     return ServerSetup(servers=servers, master_fds=master_fds, sim_coroutines=sim_coroutines)
 

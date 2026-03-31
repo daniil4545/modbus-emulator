@@ -38,15 +38,18 @@ go run . --config ../modbus-emulator/devices_patched.yaml
 
 ```
 modbus-emulator/
-├── config.py         # парсинг YAML, кодирование test_value → uint16 words
-├── servers.py        # создание серверов по DeviceConfig; ObservableDataBlock
-├── simulator.py      # фоновые корутины обновления динамических регистров
-├── devices.yaml      # 16 устройств: TCP, RTU-over-TCP, serial
+├── config.py           # парсинг YAML, кодирование test_value → uint16 words
+├── servers.py          # создание серверов по DeviceConfig; ObservableDataBlock
+├── simulator.py        # фоновые корутины обновления динамических регистров
+├── gen_stress.py       # генератор stress_devices.yaml (50 устройств, 5 профилей)
+├── devices.yaml        # 16 устройств: TCP, RTU-over-TCP, serial
 ├── requirements.txt
 └── docs/
     ├── PRD.md
     └── TASKS.md
 ```
+
+`devices_patched.yaml` создаётся автоматически при каждом запуске эмулятора — передавать в драйвер именно его.
 
 ## devices.yaml
 

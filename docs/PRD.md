@@ -100,7 +100,9 @@ await asyncio.gather(server1.serve_forever(), server2.serve_forever(), ...)
 4. `master_fd` держать открытым — это "другой конец кабеля", к которому подключается драйвер.
 5. Получить путь master: `os.ttyname(master_fd)` → передать в `devices_patched.yaml`.
 6. После создания всех PTY-пар эмулятор записывает файл `devices_patched.yaml` —
-   копию `devices.yaml` с заменёнными `path` для serial-устройств (master_fd каждого).
+   копию исходного конфига с заменёнными `path` для serial-устройств (master_fd каждого).
+   Файл записывается **всегда при старте**, даже если serial-устройств нет — чтобы драйвер
+   всегда мог использовать фиксированный путь `devices_patched.yaml`.
 7. Вывести в консоль путь к файлу:
    ```
    [emulator] Serial PTY ready. Run driver with:

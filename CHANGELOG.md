@@ -5,6 +5,20 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-03-31
+
+### Added
+
+- `gen_stress.py`: stress-test config generator — 50 TCP devices across 5 profiles
+  (pump, tank, motor, conveyor, sensor_hub), ports 16000–16049, run with `stress_devices.yaml`
+
+### Changed
+
+- `servers.py`: `devices_patched.yaml` is now written on every startup regardless of whether
+  serial devices are present — driver can always use this fixed path
+- `servers.py`: `ObservableDataBlock._on_write` promoted to a class-level annotated field
+  (`Callable | None`) to satisfy Pyright type checker
+
 ## [0.2.0] - 2026-03-31
 
 ### Added
