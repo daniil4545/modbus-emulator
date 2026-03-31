@@ -125,12 +125,14 @@ modbus-emulator/
 ├── main.py           # точка входа, asyncio.gather
 ├── config.py         # парсинг YAML, кодирование test_value → uint16 words
 ├── servers.py        # создание ModbusTcpServer / ModbusSerialServer по device
+├── simulator.py      # (v2) фоновые корутины обновления динамических регистров
 ├── pty_manager.py    # создание PTY-пар через os.openpty(), запись devices_patched.yaml
 ├── devices.yaml      # 16 устройств, полное покрытие транспортов × типов регистров
 ├── requirements.txt  # pymodbus==3.9.2, pyserial==3.5
 ├── .gitignore
 └── docs/
-    └── PRD.md
+    ├── PRD.md
+    └── TASKS.md
 ```
 
 ## Как запустить систему целиком
@@ -153,10 +155,134 @@ go run . --config ../modbus-emulator/devices_patched.yaml --mqtt-broker tcp://lo
 
 ## Вне scope (v1)
 
-- Динамические значения (инкремент, формулы)
 - TLS
 - Docker
 - Автозапуск драйвера из эмулятора
+
+---
+
+## Динамические значения (v2)
+
+### Цель
+
+Регистры с полем `sim:` в YAML обновляются в фоне по заданному закону.
+Остальные регистры (без `sim:`) остаются статичными как в v1.
+
+### Новые поля YAML
+
+**На уровне устройства:**
+```yaml
+sim_tick: 1        # интервал обновления в секундах, по умолчанию 1.0
+```
+
+**На уровне регистра:**
+```yaml
+sim:
+  type: sine       # тип симуляции (sine | ramp | step | random_walk)
+  # параметры зависят от типа — см. таблицу ниже
+```
+
+`test_value` остаётся начальным значением регистра и стартовой точкой симуляции.
+
+### Типы симуляции
+
+| type | Параметры | Поведение |
+|---|---|---|
+| `sine` | `min`, `max`, `period` (сек), `phase` (сек, опц.) | синусоида от min до max с периодом period |
+| `ramp` | `min`, `max`, `period` (сек) | линейный рост min→max за period секунд, затем сброс |
+| `step` | `values` (список), `period` (сек) | циклически перебирает values, одно значение на каждый тик до смены |
+| `random_walk` | `min`, `max`, `step` | прибавляет случайное смещение в диапазоне [-step, +step], зажимает к [min, max] |
+
+Пример для `tcp_realistic` (насос):
+```yaml
+tcp_realistic:
+  sim_tick: 1
+  registers:
+    - id: temperature
+      ...
+      test_value: 253.0
+      sim:
+        type: sine
+        min: 200.0
+        max: 320.0
+        period: 60
+    - id: rpm
+      ...
+      test_value: 1500
+      sim:
+        type: ramp
+        min: 800
+        max: 2200
+        period: 30
+    - id: load_pct
+      ...
+      test_value: 75
+      sim:
+        type: sine
+        min: 30
+        max: 95
+        period: 45
+        phase: 15
+    - id: fault
+      ...
+      test_value: 0
+      sim:
+        type: step
+        values: [0, 0, 0, 0, 0, 0, 0, 0, 0, 1]   # 10% времени fault=1
+        period: 10
+```
+
+### Архитектура
+
+Новый модуль **`simulator.py`** с двумя функциями:
+
+```python
+def compute_next(sim: SimConfig, elapsed: float) -> int | float | bool:
+    """Вычисляет значение по типу симуляции на момент времени elapsed (сек)."""
+
+async def run_device_sim(
+    device_name: str,
+    registers: list[RegisterConfig],
+    blocks: dict[str, ModbusSequentialDataBlock],
+    tick_sec: float,
+) -> None:
+    """Фоновая корутина: обновляет регистры каждые tick_sec секунд."""
+```
+
+`compute_next` — чистая функция без состояния, все типы выражаются через `elapsed`:
+- `sine`: `(max+min)/2 + (max-min)/2 * sin(2π * (elapsed+phase) / period)`
+- `ramp`: `min + (max-min) * fmod(elapsed, period) / period`
+- `step`: `values[int(elapsed / period) % len(values)]`
+- `random_walk`: хранит текущее значение в `_state` между вызовами — единственный тип с состоянием
+
+`run_device_sim` раз в `tick_sec` вызывает `compute_next` для каждого регистра с `sim:`,
+кодирует результат через `encode_value` и записывает в блок: `blocks[reg_type].setValues(address + 1, words)`.
+
+### Изменения существующих модулей
+
+**`config.py`:**
+- Новый `@dataclass SimConfig`: `type`, `min`, `max`, `period`, `phase`, `step`, `values`
+- `RegisterConfig.sim: Optional[SimConfig] = None`
+- `DeviceConfig.sim_tick: float = 1.0`
+- `load_config` парсит `sim:` блок если он присутствует
+
+**`servers.py`:**
+- `_build_context` возвращает `(ModbusServerContext, dict[str, ModbusSequentialDataBlock])`
+- `ServerSetup.sim_coroutines: list` — список корутин для `asyncio.gather`
+- `build_all` создаёт и добавляет корутину `run_device_sim` для каждого устройства с `sim:`-регистрами
+
+**Запуск:**
+```python
+await asyncio.gather(
+    *(s.serve_forever() for s in setup.servers),
+    *setup.sim_coroutines,
+)
+```
+
+### Вне scope (v2)
+
+- Зависимость между регистрами (rpm зависит от running coil)
+- Внешний API для управления симуляцией на лету
 
 ## Устройства в devices.yaml
 

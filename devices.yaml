@@ -277,6 +277,7 @@ tcp_realistic:
   port: 15029
   slave_id: 10
   poll_time: 2
+  sim_tick: 1
   registers:
     - id: temperature
       reg_type: holding
@@ -286,11 +287,21 @@ tcp_realistic:
       scale: 0.1
       truncate: 1
       test_value: 253.0        # raw 253.0 → 253.0×0.1 = "25.3"
+      sim:
+        type: sine
+        min: 200.0
+        max: 320.0
+        period: 60
     - id: rpm
       reg_type: holding
       address: 2
       format: uint
       test_value: 1500
+      sim:
+        type: ramp
+        min: 800
+        max: 2200
+        period: 30
     - id: setpoint
       reg_type: holding
       address: 3
@@ -308,11 +319,21 @@ tcp_realistic:
       reg_type: discrete
       address: 0
       test_value: 0
+      sim:
+        type: step
+        values: [0, 0, 0, 0, 0, 0, 0, 0, 0, 1]  # fault=1 примерно 10% времени
+        period: 10
     - id: load_pct
       reg_type: input
       address: 0
       format: uint
       test_value: 75
+      sim:
+        type: sine
+        min: 30
+        max: 95
+        period: 45
+        phase: 15
 
 # =============================================================================
 # Serial devices (port_type: serial, RTU framing)

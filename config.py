@@ -11,6 +11,17 @@ import yaml
 
 
 @dataclass
+class SimConfig:
+    type: str                        # "sine" | "ramp" | "step" | "random_walk"
+    min: float = 0.0
+    max: float = 1.0
+    period: float = 10.0
+    phase: float = 0.0               # сдвиг фазы в секундах, только для sine
+    step: float = 1.0                # шаг случайного блуждания, только для random_walk
+    values: list = field(default_factory=list)  # список значений, только для step
+
+
+@dataclass
 class RegisterConfig:
     reg_type: str                    # "hr", "co", "di", "ir"
     address: int
@@ -18,6 +29,7 @@ class RegisterConfig:
     reg_size: int = 1
     format: Optional[str] = None    # "uint", "int", "float"; None для coil/discrete
     bit: Optional[int] = None
+    sim: Optional[SimConfig] = None
 
 
 @dataclass
@@ -33,6 +45,7 @@ class DeviceConfig:
     parity: Optional[str] = None
     data_bits: Optional[int] = None
     stop_bits: Optional[int] = None
+    sim_tick: float = 1.0
 
 
 _REG_TYPE_MAP = {
@@ -72,6 +85,7 @@ def load_config(path: str) -> list[DeviceConfig]:
             parity=dev.get("parity"),
             data_bits=dev.get("data_bits"),
             stop_bits=dev.get("stop_bits"),
+            sim_tick=float(dev.get("sim_tick", 1.0)),
         )
 
         for reg in dev.get("registers", []):
@@ -85,12 +99,26 @@ def load_config(path: str) -> list[DeviceConfig]:
             if reg_type is None:
                 raise ValueError(f"{name}: unknown reg_type '{yaml_reg_type}'")
 
+            sim = None
+            sim_raw = reg.get("sim")
+            if sim_raw is not None:
+                sim = SimConfig(
+                    type=sim_raw["type"],
+                    min=float(sim_raw.get("min", 0.0)),
+                    max=float(sim_raw.get("max", 1.0)),
+                    period=float(sim_raw.get("period", 10.0)),
+                    phase=float(sim_raw.get("phase", 0.0)),
+                    step=float(sim_raw.get("step", 1.0)),
+                    values=list(sim_raw.get("values", [])),
+                )
+
             device.registers.append(RegisterConfig(
                 reg_type=reg_type,
                 address=reg["address"],
                 test_value=reg["test_value"],
                 reg_size=reg.get("reg_size", 1),
                 format=reg.get("format"),  # None для coil/discrete
+                sim=sim,
             ))
 
         devices.append(device)

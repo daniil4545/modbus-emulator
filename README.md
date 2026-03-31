@@ -2,7 +2,7 @@
 
 Эмулятор Modbus-устройств для функционального тестирования шлюза [go-modbus2mqtt](https://github.com/daniil/go-modbus2mqtt).
 
-Запускает набор Modbus-серверов на основе `devices.yaml`. Регистры инициализируются тестовыми значениями из поля `test_value`.
+Запускает набор Modbus-серверов на основе `devices.yaml`. Регистры инициализируются тестовыми значениями из поля `test_value`. Поддерживает динамическое изменение значений по закону симуляции (`sim:` в YAML).
 
 ## Транспорты
 
@@ -39,11 +39,13 @@ go run . --config ../modbus-emulator/devices_patched.yaml
 ```
 modbus-emulator/
 ├── config.py         # парсинг YAML, кодирование test_value → uint16 words
-├── servers.py        # создание серверов по DeviceConfig
+├── servers.py        # создание серверов по DeviceConfig; ObservableDataBlock
+├── simulator.py      # фоновые корутины обновления динамических регистров
 ├── devices.yaml      # 16 устройств: TCP, RTU-over-TCP, serial
 ├── requirements.txt
 └── docs/
-    └── PRD.md
+    ├── PRD.md
+    └── TASKS.md
 ```
 
 ## devices.yaml

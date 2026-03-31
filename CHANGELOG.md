@@ -5,6 +5,22 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-03-31
+
+### Added
+
+- `simulator.py`: dynamic register simulation with `compute_next` (sine, ramp, step, random_walk)
+  and `run_device_sim` async coroutine that updates registers every `sim_tick` seconds
+- `config.py`: `SimConfig` dataclass; `RegisterConfig.sim` field; `DeviceConfig.sim_tick` field;
+  `load_config` now parses `sim:` blocks from YAML
+- `servers.py`: `ObservableDataBlock` subclass — logs incoming FC5/FC6/FC16 writes to stdout;
+  `sim_setValues` method for simulator writes (bypasses the write log);
+  `ServerSetup.sim_coroutines` field; simulation coroutines launched via `asyncio.gather`
+- `devices.yaml`: `tcp_realistic` now has `sim_tick: 1` and `sim:` on four registers —
+  temperature (sine 200–320, 60s), rpm (ramp 800–2200, 30s),
+  fault (step, 10% duty), load_pct (sine 30–95, 45s)
+- `docs/TASKS.md`: task tracking file
+
 ## [0.1.1] - 2026-03-30
 
 ### Fixed
