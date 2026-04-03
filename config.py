@@ -170,7 +170,7 @@ if __name__ == "__main__":
         addr_info = f"{dev.ip}:{dev.port}" if dev.ip else dev.path
         print(f"  [{dev.port_type}] {dev.name}  {addr_info}  slave_id={dev.slave_id}")
         for reg in dev.registers:
-            words = encode_value(reg.test_value, reg.format, reg.reg_size)
+            words = encode_value(reg.test_value, reg.format, reg.reg_size, reg.byte_order)
             print(
                 f"    [{reg.reg_type}] addr={reg.address}  "
                 f"fmt={reg.format or 'bool'}  val={reg.test_value}  words={words}"

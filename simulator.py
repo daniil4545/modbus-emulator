@@ -75,5 +75,5 @@ async def run_device_sim(
             else:
                 value = raw
 
-            words = encode_value(value, reg.format, reg.reg_size)
+            words = encode_value(value, reg.format, reg.reg_size, reg.byte_order)
             blocks[reg.reg_type].sim_setValues(reg.address + 1, words)

@@ -58,7 +58,7 @@ def _build_context(
     }
 
     for reg in device.registers:
-        words = encode_value(reg.test_value, reg.format, reg.reg_size)
+        words = encode_value(reg.test_value, reg.format, reg.reg_size, reg.byte_order)
         blocks[reg.reg_type].setValues(reg.address + 1, words)
 
     # Включаем колбэки после init — выше они были None и не срабатывали
