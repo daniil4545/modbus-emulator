@@ -143,6 +143,9 @@ def encode_value(
     if fmt is None:
         return [int(bool(value))]
 
+    if byte_order not in ("big-endian", "little-endian"):
+        raise ValueError(f"unknown byte_order: {byte_order!r}; expected 'big-endian' or 'little-endian'")
+
     struct_fmt = _STRUCT_FORMATS.get((fmt, reg_size))
     if struct_fmt is None:
         raise ValueError(f"unsupported: format='{fmt}', reg_size={reg_size}")
