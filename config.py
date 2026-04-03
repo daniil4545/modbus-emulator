@@ -126,13 +126,19 @@ def load_config(path: str) -> list[DeviceConfig]:
     return devices
 
 
-def encode_value(value: int | float | bool, fmt: Optional[str], reg_size: int) -> list[int]:
+def encode_value(
+    value: int | float | bool,
+    fmt: Optional[str],
+    reg_size: int,
+    byte_order: str = "big-endian",
+) -> list[int]:
     """Кодирует test_value в список uint16 words для записи в Modbus datastore.
 
     fmt=None означает coil или discrete — кодируется как один бит (0 или 1).
 
-    Multi-register значения кодируются в big-endian word order (high word first),
-    так как go-modbus-client читает регистры в стандартном big-endian порядке.
+    byte_order="big-endian": high word first (дефолт).
+    byte_order="little-endian": word-swap — те же bytes, слова в обратном порядке.
+    Для reg_size=1 и coil/discrete byte_order игнорируется.
     """
     if fmt is None:
         return [int(bool(value))]
@@ -142,7 +148,12 @@ def encode_value(value: int | float | bool, fmt: Optional[str], reg_size: int) -
         raise ValueError(f"unsupported: format='{fmt}', reg_size={reg_size}")
 
     raw = struct.pack(struct_fmt, value)
-    return list(struct.unpack(f">{len(raw) // 2}H", raw))
+    words = list(struct.unpack(f">{len(raw) // 2}H", raw))
+
+    if byte_order == "little-endian" and len(words) > 1:
+        words = list(reversed(words))
+
+    return words
 
 
 if __name__ == "__main__":
