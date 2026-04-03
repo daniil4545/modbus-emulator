@@ -12,46 +12,63 @@ tcp_sensor:
   ip: 127.0.0.1
   port: 15020            # стартовый порт; +i для каждой копии при count > 1
   slave_id: 1            # стартовый slave_id; +i для каждой копии
-  count: 2               # → tcp_sensor_01 (port=15020) и tcp_sensor_02 (port=15021)
-  sim_tick: 1.0          # интервал обновления sim-регистров в секундах
+  count: 10               # → tcp_sensor_01 (port=15020) и tcp_sensor_02 (port=15021)
+  sim_tick: 1.0          # интервал обновления sim-регистров, сек; default: 1.0
+  timeout: 1             # таймаут соединения, сек (для драйвера); default: 1
+  poll_time: 5           # интервал опроса, сек (для драйвера); default: 5
   registers:
 
-    # Статический holding-регистр, доступный для записи драйвером
-    - reg_type: holding  # holding | input | coil | discrete
+    # Полный набор полей регистра
+    - id: setpoint             # идентификатор регистра (для драйвера)
+      reg_type: holding        # holding | input | coil | discrete
       address: 0
-      reg_size: 1        # 1=16bit, 2=32bit, 4=64bit; для coil/discrete всегда 1
-      format: uint       # uint | int | float; для coil/discrete не указывается
-      test_value: 100
-      writeable: true    # флаг для драйвера; протокол Modbus всегда разрешает запись в holding
+      reg_size: 1              # 1=16bit, 2=32bit, 4=64bit; coil/discrete всегда 1
+      format: uint             # uint | int | float; coil/discrete: не указывается
+      test_value: 100          # начальное значение в datastore эмулятора
+      byte_order: big-endian   # big-endian | little-endian (word-swap); reg_size=1: игнорируется
+      bit: ~                   # 0-15: извлечь конкретный бит (для драйвера); ~ — не используется
+      scale: 1.0               # множитель значения (для драйвера)
+      truncate: ~              # знаков после запятой (для драйвера); ~ — без ограничений
+      writeable: true          # признак записываемого регистра (для драйвера)
 
-    # Динамический input-регистр с симуляцией синуса
-    - reg_type: input
+    # Динамический input-регистр с симуляцией
+    - id: temperature
+      reg_type: input
       address: 0
       reg_size: 2
       format: float
       test_value: 25.0
+      scale: 0.1
+      truncate: 1
       sim:
-        type: sine       # sine | ramp | step | random_walk
+        type: sine             # sine | ramp | step | random_walk
         min: 20.0
         max: 30.0
-        period: 60       # период в секундах
+        period: 60             # период, сек
+        phase: 0.0             # сдвиг фазы, сек (только sine)
+        # step: 0.5            # шаг блуждания (только random_walk)
+        # values: [10, 20, 30] # список значений для цикла (только step)
 
     # Holding float с little-endian word order (low word first)
-    - reg_type: holding
+    - id: setpoint_float
+      reg_type: holding
       address: 2
       reg_size: 2
       format: float
       test_value: 99.9
       byte_order: little-endian
+      writeable: true
 
-    # Writable coil (одноbitный регистр, значение 0 или 1)
-    - reg_type: coil
+    # Writable coil (однобитный регистр)
+    - id: output_enable
+      reg_type: coil
       address: 0
       test_value: 1
       writeable: true
 
-    # Статический discrete input (read-only однобитный регистр)
-    - reg_type: discrete
+    # Discrete input (read-only однобитный регистр)
+    - id: fault_flag
+      reg_type: discrete
       address: 0
       test_value: 0
 
@@ -61,8 +78,11 @@ rtu_controller:
   port: 15030
   slave_id: 10
   count: 1
+  timeout: 1
+  poll_time: 5
   registers:
-    - reg_type: holding
+    - id: control_word
+      reg_type: holding
       address: 0
       reg_size: 1
       format: uint
@@ -76,8 +96,11 @@ serial_meter:
   data_bits: 8
   stop_bits: 1
   count: 1
+  timeout: 1
+  poll_time: 5
   registers:
-    - reg_type: holding
+    - id: energy_kwh
+      reg_type: holding
       address: 0
       reg_size: 1
       format: uint

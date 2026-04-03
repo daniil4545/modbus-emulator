@@ -1,62 +1,70 @@
 # modbus-emulator
 
-Эмулятор Modbus-устройств для функционального тестирования шлюза [go-modbus2mqtt](https://github.com/daniil/go-modbus2mqtt).
+Эмулятор Modbus-устройств для тестирования шлюза [go-modbus2mqtt](https://github.com/daniil/go-modbus2mqtt).
 
-Запускает набор Modbus-серверов на основе `devices.yaml`. Регистры инициализируются тестовыми значениями из поля `test_value`. Поддерживает динамическое изменение значений по закону симуляции (`sim:` в YAML).
+Читает `template.yaml`, разворачивает прототипы устройств по полю `count` и запускает Modbus-серверы. Регистры инициализируются из `test_value`, динамические меняются по закону из `sim:`.
 
-## Транспорты
+## Быстрый старт
 
-| `port_type` | Framing | Реализация |
-|---|---|---|
-| `modbus tcp` | MBAP | `ModbusTcpServer` + `FramerType.SOCKET` |
-| `tcp` | RTU-over-TCP | `ModbusTcpServer` + `FramerType.RTU` |
-| `serial` | RTU | `ModbusSerialServer` + `os.openpty()` |
-
-## Требования
-
-- Python 3.10+
-- `pip install -r requirements.txt` (pymodbus 3.9.2, pyserial 3.5)
-
-## Запуск
+**1. Установить зависимости**
 
 ```bash
 python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
-
-# Запуск эмулятора
-python servers.py devices.yaml
 ```
 
-Для serial-устройств эмулятор создаёт PTY-пары и записывает `devices_patched.yaml`
-с актуальными путями. Передать этот файл драйверу:
+**2. Настроить устройства**
+
+Отредактировать `template.yaml` — описать нужные устройства. Файл содержит все доступные поля с комментариями; неиспользуемые можно удалить. Поле `count: N` создаёт N копий прототипа с инкрементом порта и slave_id.
+
+**3. Запустить эмулятор**
 
 ```bash
-go run . --config ../modbus-emulator/devices_patched.yaml
+python main.py
 ```
 
-## Структура
+При запуске выведет список серверов и команду для драйвера:
+
+```
+[generator] Expanded 4 devices → /path/to/devices.yaml
+[modbus tcp]  tcp_sensor_01  127.0.0.1:15020  slave_id=1
+[modbus tcp]  tcp_sensor_02  127.0.0.1:15021  slave_id=2
+[tcp]         rtu_controller  127.0.0.1:15030  slave_id=10
+[serial]      serial_meter  driver_path=/dev/pts/3  slave_id=20
+
+[emulator] Run driver with:
+  go run . --config /path/to/devices_patched.yaml
+
+All servers ready. Press Ctrl+C to stop.
+```
+
+**4. Запустить драйвер** (в отдельном терминале)
+
+Скопировать путь из вывода эмулятора:
+
+```bash
+go run . --config /path/to/devices_patched.yaml
+```
+
+## Транспорты
+
+| `port_type` | Framing | Класс |
+|---|---|---|
+| `modbus tcp` | MBAP | `ModbusTcpServer` + `FramerType.SOCKET` |
+| `tcp` | RTU-over-TCP | `ModbusTcpServer` + `FramerType.RTU` |
+| `serial` | RTU | `ModbusSerialServer` + PTY |
+
+## Структура проекта
 
 ```
 modbus-emulator/
-├── config.py           # парсинг YAML, кодирование test_value → uint16 words
-├── servers.py          # создание серверов по DeviceConfig; ObservableDataBlock
-├── simulator.py        # фоновые корутины обновления динамических регистров
-├── gen_stress.py       # генератор stress_devices.yaml (50 устройств, 5 профилей)
-├── devices.yaml        # 16 устройств: TCP, RTU-over-TCP, serial
-├── requirements.txt
-└── docs/
-    ├── PRD.md
-    └── TASKS.md
+├── template.yaml   # конфиг устройств — редактировать здесь
+├── main.py         # точка входа
+├── generator.py    # разворачивает template.yaml → devices.yaml
+├── config.py       # парсинг YAML, кодирование значений в uint16 words
+├── servers.py      # создание серверов; PTY для serial
+├── simulator.py    # динамическое обновление регистров (sim:)
+└── requirements.txt
 ```
 
-`devices_patched.yaml` создаётся автоматически при каждом запуске эмулятора — передавать в драйвер именно его.
-
-## devices.yaml
-
-16 тестовых устройств, охватывающих все комбинации транспортов и типов регистров:
-
-| Группа | Устройства | Порты |
-|---|---|---|
-| modbus tcp | tcp_uint, tcp_int, tcp_float, tcp_scale, tcp_coil, tcp_discrete, tcp_input, tcp_bitmap, tcp_write, tcp_realistic | 15020–15029 |
-| RTU-over-TCP | rtu_holding, rtu_coil_discrete, rtu_bitmap | 15030–15032 |
-| serial | serial_holding, serial_coil_discrete, serial_bitmap_write | PTY |
+`devices.yaml` и `devices_patched.yaml` генерируются при каждом запуске — в git не хранятся.

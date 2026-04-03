@@ -1,56 +1,48 @@
 # TASKS — modbus-emulator
 
-## v2: Динамические значения
+## v1 + v2: Выполнено
 
-Цель: регистры с полем `sim:` обновляются в фоне по заданному закону.
-Детали архитектуры и YAML-синтаксис — в PRD.md (секция "Динамические значения").
+- [x] `config.py`: парсинг YAML, `encode_value`, `SimConfig`, `DeviceConfig.sim_tick`
+- [x] `servers.py`: TCP / RTU-over-TCP / serial, PTY-пары, `devices_patched.yaml`, `ObservableDataBlock`
+- [x] `simulator.py`: `compute_next` (sine/ramp/step/random_walk), `run_device_sim`
+- [x] `devices.yaml`: 16 устройств, полное покрытие транспортов × типов регистров
+- [x] `tcp_realistic`: sim-регистры (temperature, rpm, load_pct, fault)
+- [x] Исправлен offset +1 и big-endian word order в `encode_value`
 
----
+## M5: Ручное тестирование (pending)
 
-### M1: Расширение config.py
-
-- [x] Добавить `@dataclass SimConfig` с полями:
-      `type: str`, `min`, `max`, `period`, `phase`, `step`, `values`
-- [x] Добавить `sim: Optional[SimConfig] = None` в `RegisterConfig`
-- [x] Добавить `sim_tick: float = 1.0` в `DeviceConfig`
-- [x] Обновить `load_config`: парсить `sim:` блок если присутствует;
-      поле `values` — список, остальные — числа
-
-### M2: Модуль simulator.py
-
-- [x] Реализовать `compute_next(sim: SimConfig, elapsed: float) -> int | float | bool`
-      для типов `sine`, `ramp`, `step`
-- [x] Реализовать `random_walk`: хранит текущее значение в изменяемом контейнере
-      (например, `list[float]` с одним элементом), передаётся в `compute_next`
-- [x] Реализовать `run_device_sim(device_name, registers, blocks, tick_sec) -> coroutine`
-
-### M3: Интеграция в servers.py
-
-- [x] Изменить `_build_context` — возвращать `(context, blocks)`
-      где `blocks: dict[str, ObservableDataBlock]`
-- [x] Добавить `sim_setValues` в `ObservableDataBlock` — запись без колбэка
-- [x] Добавить `sim_coroutines: list` в `ServerSetup`
-- [x] В `build_all`: для каждого устройства с sim-регистрами создавать корутину
-      `run_device_sim` и добавлять в `ServerSetup.sim_coroutines`
-- [x] Обновить `__main__`: `asyncio.gather(*servers, *sim_coroutines)`
-
-### M4: Обновление devices.yaml
-
-- [x] Добавить `sim_tick: 1` и `sim:` блоки к `tcp_realistic` (temperature, rpm, load_pct, fault)
-- [x] Убедиться что статические устройства (tcp_uint и др.) не затронуты
-
-### M5: Проверка
-
-- [ ] Запустить эмулятор, проверить в логах драйвера что значения `tcp_realistic`
-      меняются каждые несколько секунд
-- [ ] Убедиться что статические устройства продолжают отдавать фиксированные значения
+- [ ] Запустить связку эмулятор + драйвер
+- [ ] Убедиться что `tcp_realistic` меняет значения, статические устройства стабильны
 
 ---
 
-## v1: Выполнено
+## v3: Template Generator
 
-- [x] `config.py`: парсинг YAML, `encode_value` (все форматы, big-endian word order)
-- [x] `servers.py`: TCP, RTU-over-TCP, serial; PTY-пары; `devices_patched.yaml`
-- [x] `devices.yaml`: 16 устройств, полное покрытие
-- [x] Исправлен offset +1 при записи в `ModbusSequentialDataBlock`
-- [x] Исправлен порядок слов в `encode_value` (big-endian, не reversed)
+Спек: `docs/superpowers/specs/2026-03-31-template-generator-design.md`
+
+### M6: `generator.py` — Выполнено
+
+- [x] `expand_template(template_path) -> dict`: читает template.yaml, разворачивает `count`
+      - count=1: имя без суффикса, поля без изменений
+      - count>1: `name_01..name_N`, port+i, slave_id+i (serial: только slave_id+i)
+      - поле `count` удаляется из output
+- [x] `save_devices(expanded, output_path)`: сохраняет dict в YAML
+- [x] `if __name__ == "__main__"`: standalone запуск `python generator.py template.yaml [out.yaml]`
+
+### M7: `template.yaml` — Выполнено
+
+- [x] Три прототипа: `modbus tcp`, `tcp`, `serial`
+- [x] `tcp_sensor`: holding (writable), input (sim:sine), coil (writable), discrete
+- [x] Подробные комментарии по полям
+
+### M8: `main.py` — Выполнено
+
+- [x] Точка входа: `sys.argv[1]` или дефолт `template.yaml`
+- [x] Вызов `expand_template` → `save_devices` → `load_config` → `build_all` → `asyncio.gather`
+- [x] Печать `[generator] Expanded N devices → path/to/devices.yaml`
+
+### M9: Обновление `.gitignore` и `README.md` — Выполнено
+
+- [x] Добавить `devices.yaml` в `.gitignore`
+- [x] Обновить README: новый workflow (template → main.py)
+- [x] Удалить `gen_stress.py`

@@ -2,305 +2,67 @@
 
 ## Цель
 
-Эмулятор Modbus-устройств для ручного функционального тестирования шлюза go-modbus2mqtt.
-Запускает набор Modbus-серверов на основе YAML-конфига. Регистры инициализируются
-тестовыми значениями из поля `test_value`.
+Эмулятор Modbus-устройств для тестирования шлюза go-modbus2mqtt.
+Запускает серверы из YAML-конфига, инициализирует регистры из `test_value`.
 
 ## Транспорты
 
-| `port_type` в config | pymodbus класс | Framer |
+| `port_type` | pymodbus класс | Framer |
 |---|---|---|
 | `modbus tcp` | `ModbusTcpServer` | `FramerType.SOCKET` |
 | `tcp` | `ModbusTcpServer` | `FramerType.RTU` (RTU-over-TCP) |
-| `serial` | `ModbusSerialServer` | `FramerType.RTU` + os.openpty() |
+| `serial` | `ModbusSerialServer` | `FramerType.RTU` + `os.openpty()` |
 
-Один asyncio-процесс, все серверы запускаются через `asyncio.gather`.
+## Конфиг (`devices.yaml`)
 
-## Конфиг
-
-Файл `devices.yaml`. Поля, которые читает эмулятор:
-
+Поля, которые читает эмулятор:
 ```
 port_type, ip, port, slave_id
-path, baud_rate, parity, data_bits, stop_bits     # только для serial
-registers[].reg_type, address, reg_size, format, bit, test_value
+path, baud_rate, parity, data_bits, stop_bits   # только serial
+registers[].reg_type, address, reg_size, format, bit, test_value, sim
 ```
+Остальные поля (id, writeable и др.) передаются в файл без изменений и читаются драйвером.
 
-Поле `test_value` игнорируется драйвером (неизвестные поля yaml.v3 отбрасывает).
+## Кодирование test_value → uint16 words
 
-## Кодирование test_value в регистры Modbus
+При записи в datablock: `block.setValues(address + 1, words)` (+1 компенсирует внутренний offset `ModbusSlaveContext`).
 
-Регистры Modbus хранят uint16. Все многобайтовые значения — big-endian.
+| format | reg_size | struct |
+|---|---|---|
+| uint | 1 / 2 / 4 | `>H` / `>I` / `>Q` |
+| int | 1 / 2 / 4 | `>h` / `>i` / `>q` |
+| float | 2 / 4 | `>f` / `>d` |
+| coil / discrete | — | `bool(v)` |
 
-| format | reg_size | Python | Результат |
-|---|---|---|---|
-| uint | 1 | `struct.pack('>H', v)` | 1 слово |
-| uint | 2 | `struct.pack('>I', v)` | 2 слова |
-| uint | 4 | `struct.pack('>Q', v)` | 4 слова |
-| int | 1 | `struct.pack('>h', v)` | 1 слово (two's complement) |
-| int | 2 | `struct.pack('>i', v)` | 2 слова |
-| int | 4 | `struct.pack('>q', v)` | 4 слова |
-| float | 2 | `struct.pack('>f', v)` | 2 слова |
-| float | 4 | `struct.pack('>d', v)` | 4 слова |
-| coil / discrete | — | bool(v) | один бит |
-| любой, поле `bit` | — | пропустить | raw_word того же address уже задаёт слово |
+`byte_order` (на уровне регистра): `"big-endian"` (дефолт, high word first) | `"little-endian"` (word-swap — reversed uint16 list). Для `reg_size=1` и coil/discrete игнорируется.
 
-Конверсия packed bytes → список uint16:
-```python
-raw = struct.pack('>I', value)                    # пример для uint32
-words = list(struct.unpack(f'>{len(raw)//2}H', raw))
-```
+## Симуляция (поле `sim:`)
 
-Регистровый блок: `ModbusSequentialDataBlock(0, [0] * 65536)` — потом записать words по адресу.
-
-**Важно: offset +1 в `ModbusSlaveContext`.**
-`ModbusSlaveContext.getValues` и `setValues` жёстко прибавляют `+1` к адресу внутри.
-При прямой записи в `ModbusSequentialDataBlock` (минуя контекст) нужно компенсировать:
-```python
-block.setValues(address + 1, words)  # +1 компенсирует внутренний offset ModbusSlaveContext
-```
-
-## pymodbus API (v3.x)
-
-```python
-from pymodbus import FramerType
-from pymodbus.datastore import ModbusSequentialDataBlock, ModbusSlaveContext, ModbusServerContext
-from pymodbus.server import ModbusTcpServer, ModbusSerialServer
-
-# Контекст для одного устройства
-store = ModbusSlaveContext(  # в pymodbus 3.9.2 класс называется ModbusSlaveContext; ModbusDeviceContext не существует
-    di=ModbusSequentialDataBlock(0, [0] * 65536),
-    co=ModbusSequentialDataBlock(0, [0] * 65536),
-    hr=ModbusSequentialDataBlock(0, [0] * 65536),
-    ir=ModbusSequentialDataBlock(0, [0] * 65536),
-)
-context = ModbusServerContext(slaves=store, single=True)
-
-# Modbus TCP (MBAP)
-server = ModbusTcpServer(context, address=("0.0.0.0", port), framer=FramerType.SOCKET)
-
-# RTU-over-TCP
-server = ModbusTcpServer(context, address=("0.0.0.0", port), framer=FramerType.RTU)
-
-# Serial RTU
-server = ModbusSerialServer(context, port="/dev/pts/3", framer=FramerType.RTU,
-                             baudrate=9600, bytesize=8, parity="N", stopbits=1)
-
-await asyncio.gather(server1.serve_forever(), server2.serve_forever(), ...)
-```
-
-## Serial: os.openpty() и передача путей драйверу
-
-Для каждого `port_type: serial` устройства используется `os.openpty()` из стандартной
-библиотеки Python — без внешних зависимостей.
-
-1. Вызвать `os.openpty()` — возвращает `(master_fd, slave_fd)`.
-2. Получить путь slave: `os.ttyname(slave_fd)` → строка вида `/dev/pts/X`.
-3. Эмулятор слушает на slave (`ModbusSerialServer(port=slave_path, ...)`).
-4. `master_fd` держать открытым — это "другой конец кабеля", к которому подключается драйвер.
-5. Получить путь master: `os.ttyname(master_fd)` → передать в `devices_patched.yaml`.
-6. После создания всех PTY-пар эмулятор записывает файл `devices_patched.yaml` —
-   копию исходного конфига с заменёнными `path` для serial-устройств (master_fd каждого).
-   Файл записывается **всегда при старте**, даже если serial-устройств нет — чтобы драйвер
-   всегда мог использовать фиксированный путь `devices_patched.yaml`.
-7. Вывести в консоль путь к файлу:
-   ```
-   [emulator] Serial PTY ready. Run driver with:
-     go run . --config /abs/path/to/devices_patched.yaml
-   ```
-
-Файл `devices_patched.yaml` не коммитится (добавить в `.gitignore`).
-
-## Запись регистров
-
-pymodbus по умолчанию сохраняет FC5/FC6/FC16 в datastore. Следующий poll вернёт
-записанное значение — дополнительного кода не требуется.
-
-## Graceful shutdown
-
-Ctrl+C → отмена asyncio tasks → закрытие PTY файловых дескрипторов → выход.
-
-## Структура файлов
-
-```
-modbus-emulator/
-├── main.py           # точка входа, asyncio.gather
-├── config.py         # парсинг YAML, кодирование test_value → uint16 words
-├── servers.py        # создание ModbusTcpServer / ModbusSerialServer по device
-├── simulator.py      # (v2) фоновые корутины обновления динамических регистров
-├── pty_manager.py    # создание PTY-пар через os.openpty(), запись devices_patched.yaml
-├── devices.yaml      # 16 устройств, полное покрытие транспортов × типов регистров
-├── requirements.txt  # pymodbus==3.9.2, pyserial==3.5
-├── .gitignore
-└── docs/
-    ├── PRD.md
-    └── TASKS.md
-```
-
-## Как запустить систему целиком
-
-```bash
-# Терминал 1 — эмулятор
-cd modbus-emulator
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-python main.py
-# выведет путь к devices_patched.yaml
-
-# Терминал 2 — MQTT брокер
-docker run -p 1883:1883 eclipse-mosquitto
-
-# Терминал 3 — драйвер
-cd go-modbus2mqtt
-go run . --config ../modbus-emulator/devices_patched.yaml --mqtt-broker tcp://localhost:1883
-```
-
-## Вне scope (v1)
-
-- TLS
-- Docker
-- Автозапуск драйвера из эмулятора
-
----
-
-## Динамические значения (v2)
-
-### Цель
-
-Регистры с полем `sim:` в YAML обновляются в фоне по заданному закону.
-Остальные регистры (без `sim:`) остаются статичными как в v1.
-
-### Новые поля YAML
-
-**На уровне устройства:**
-```yaml
-sim_tick: 1        # интервал обновления в секундах, по умолчанию 1.0
-```
-
-**На уровне регистра:**
-```yaml
-sim:
-  type: sine       # тип симуляции (sine | ramp | step | random_walk)
-  # параметры зависят от типа — см. таблицу ниже
-```
-
-`test_value` остаётся начальным значением регистра и стартовой точкой симуляции.
-
-### Типы симуляции
+`sim_tick: float` на уровне устройства (дефолт 1.0 сек).
 
 | type | Параметры | Поведение |
 |---|---|---|
-| `sine` | `min`, `max`, `period` (сек), `phase` (сек, опц.) | синусоида от min до max с периодом period |
-| `ramp` | `min`, `max`, `period` (сек) | линейный рост min→max за period секунд, затем сброс |
-| `step` | `values` (список), `period` (сек) | циклически перебирает values, одно значение на каждый тик до смены |
-| `random_walk` | `min`, `max`, `step` | прибавляет случайное смещение в диапазоне [-step, +step], зажимает к [min, max] |
+| `sine` | `min`, `max`, `period`, `phase` (опц.) | синусоида |
+| `ramp` | `min`, `max`, `period` | линейный рост, сброс |
+| `step` | `values` (список), `period` | циклический перебор |
+| `random_walk` | `min`, `max`, `step` | случайное блуждание |
 
-Пример для `tcp_realistic` (насос):
-```yaml
-tcp_realistic:
-  sim_tick: 1
-  registers:
-    - id: temperature
-      ...
-      test_value: 253.0
-      sim:
-        type: sine
-        min: 200.0
-        max: 320.0
-        period: 60
-    - id: rpm
-      ...
-      test_value: 1500
-      sim:
-        type: ramp
-        min: 800
-        max: 2200
-        period: 30
-    - id: load_pct
-      ...
-      test_value: 75
-      sim:
-        type: sine
-        min: 30
-        max: 95
-        period: 45
-        phase: 15
-    - id: fault
-      ...
-      test_value: 0
-      sim:
-        type: step
-        values: [0, 0, 0, 0, 0, 0, 0, 0, 0, 1]   # 10% времени fault=1
-        period: 10
+## Структура файлов (v3)
+
+```
+modbus-emulator/
+├── main.py          # точка входа: generator → config → servers
+├── generator.py     # template.yaml → devices.yaml (expand count)
+├── config.py        # парсинг devices.yaml → [DeviceConfig]
+├── servers.py       # ModbusTcpServer / ModbusSerialServer + PTY + devices_patched.yaml
+├── simulator.py     # фоновые корутины sim-регистров
+├── template.yaml    # пользовательский конфиг (редактируется)
+├── requirements.txt # pymodbus==3.9.2, pyserial==3.5
+└── docs/
 ```
 
-### Архитектура
-
-Новый модуль **`simulator.py`** с двумя функциями:
-
-```python
-def compute_next(sim: SimConfig, elapsed: float) -> int | float | bool:
-    """Вычисляет значение по типу симуляции на момент времени elapsed (сек)."""
-
-async def run_device_sim(
-    device_name: str,
-    registers: list[RegisterConfig],
-    blocks: dict[str, ModbusSequentialDataBlock],
-    tick_sec: float,
-) -> None:
-    """Фоновая корутина: обновляет регистры каждые tick_sec секунд."""
-```
-
-`compute_next` — чистая функция без состояния, все типы выражаются через `elapsed`:
-- `sine`: `(max+min)/2 + (max-min)/2 * sin(2π * (elapsed+phase) / period)`
-- `ramp`: `min + (max-min) * fmod(elapsed, period) / period`
-- `step`: `values[int(elapsed / period) % len(values)]`
-- `random_walk`: хранит текущее значение в `_state` между вызовами — единственный тип с состоянием
-
-`run_device_sim` раз в `tick_sec` вызывает `compute_next` для каждого регистра с `sim:`,
-кодирует результат через `encode_value` и записывает в блок: `blocks[reg_type].setValues(address + 1, words)`.
-
-### Изменения существующих модулей
-
-**`config.py`:**
-- Новый `@dataclass SimConfig`: `type`, `min`, `max`, `period`, `phase`, `step`, `values`
-- `RegisterConfig.sim: Optional[SimConfig] = None`
-- `DeviceConfig.sim_tick: float = 1.0`
-- `load_config` парсит `sim:` блок если он присутствует
-
-**`servers.py`:**
-- `_build_context` возвращает `(ModbusServerContext, dict[str, ModbusSequentialDataBlock])`
-- `ServerSetup.sim_coroutines: list` — список корутин для `asyncio.gather`
-- `build_all` создаёт и добавляет корутину `run_device_sim` для каждого устройства с `sim:`-регистрами
-
-**Запуск:**
-```python
-await asyncio.gather(
-    *(s.serve_forever() for s in setup.servers),
-    *setup.sim_coroutines,
-)
-```
-
-### Вне scope (v2)
-
-- Зависимость между регистрами (rpm зависит от running coil)
-- Внешний API для управления симуляцией на лету
-
-## Устройства в devices.yaml
-
-16 устройств, полное покрытие `port_type` × `reg_type`:
-
-| Группа | Устройства | Порты | slave_id |
-|---|---|---|---|
-| modbus tcp | tcp_uint, tcp_int, tcp_float, tcp_scale | 15020–15023 | 1–4 |
-| modbus tcp | tcp_coil, tcp_discrete, tcp_input | 15024–15026 | 5–7 |
-| modbus tcp | tcp_bitmap, tcp_write, tcp_realistic | 15027–15029 | 8–10 |
-| serial | serial_holding, serial_coil_discrete, serial_bitmap_write | os.openpty() PTY | 11–13 |
-| RTU-over-TCP | rtu_holding, rtu_coil_discrete, rtu_bitmap | 15030–15032 | 14–16 |
+Генерируемые (gitignore): `devices.yaml`, `devices_patched.yaml`.
 
 ## Стек
 
-- Python 3.10+
-- pymodbus 3.9.2 (asyncio, закреплена версия во избежание breaking changes)
-- pyserial 3.5
-- os (стандартная библиотека Python, внешних зависимостей не требует)
+Python 3.10+, pymodbus 3.9.2, pyserial 3.5
