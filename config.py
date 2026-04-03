@@ -30,6 +30,7 @@ class RegisterConfig:
     format: Optional[str] = None    # "uint", "int", "float"; None для coil/discrete
     bit: Optional[int] = None
     sim: Optional[SimConfig] = None
+    byte_order: str = "big-endian"  # "big-endian" | "little-endian"
 
 
 @dataclass
@@ -119,6 +120,7 @@ def load_config(path: str) -> list[DeviceConfig]:
                 reg_size=reg.get("reg_size", 1),
                 format=reg.get("format"),  # None для coil/discrete
                 sim=sim,
+                byte_order=reg.get("byte_order", "big-endian"),
             ))
 
         devices.append(device)
