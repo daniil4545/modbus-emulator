@@ -1,55 +1,33 @@
-# template.yaml — шаблон устройств для modbus-emulator
+# template.yaml — тестовый конфиг для go-modbus2mqtt
 #
-# count: N — создать N копий устройства
-#   имена:    name_01 .. name_N
-#   port:     base_port + i  (только для tcp / modbus tcp; у serial нет port)
-#   slave_id: base_slave_id + i
-#
-# count: 1 (по умолчанию) — устройство остаётся под исходным именем
+# 6 регистров: все reg_type, форматы, byte_order, writeable, sim, event
+# Справочник полей и примеры: template.example.yaml
 
-tcp_sensor:
-  port_type: modbus tcp  # modbus tcp | tcp (RTU-over-TCP) | serial
+test_device:
+  port_type: modbus_tcp
   ip: 127.0.0.1
-  port: 15020            # стартовый порт; +i для каждой копии при count > 1
-  slave_id: 1            # стартовый slave_id; +i для каждой копии
-  count: 10               # → tcp_sensor_01 (port=15020) и tcp_sensor_02 (port=15021)
-  sim_tick: 1.0          # интервал обновления sim-регистров, сек; default: 1.0
-  timeout: 1             # таймаут соединения, сек (для драйвера); default: 1
-  poll_time: 5           # интервал опроса, сек (для драйвера); default: 5
+  port: 15020
+  slave_id: 1
+  count: 1
+  sim_tick: 2.0
+  timeout: 1
+  poll_time: 5
   registers:
 
-    # Полный набор полей регистра
-    - id: setpoint             # идентификатор регистра (для драйвера)
-      reg_type: holding        # holding | input | coil | discrete
+    # [holding] int, 1 word, big-endian — baseline
+    # bit: 5 → бит 5 = 1 (42 = 0b101010), тест bit-extraction на стороне драйвера
+    - id: status_word
+      reg_type: holding
       address: 0
-      reg_size: 1              # 1=16bit, 2=32bit, 4=64bit; coil/discrete всегда 1
-      format: uint             # uint | int | float; coil/discrete: не указывается
-      test_value: 100          # начальное значение в datastore эмулятора
-      byte_order: big-endian   # big-endian | little-endian (word-swap); reg_size=1: игнорируется
-      bit: ~                   # 0-15: извлечь конкретный бит (для драйвера); ~ — не используется
-      scale: 1.0               # множитель значения (для драйвера)
-      truncate: ~              # знаков после запятой (для драйвера); ~ — без ограничений
-      writeable: true          # признак записываемого регистра (для драйвера)
+      reg_size: 1
+      format: int
+      test_value: 42
+      byte_order: big-endian
+      scale: 1
+      truncate: 0
+      writeable: 0
 
-    # Динамический input-регистр с симуляцией
-    - id: temperature
-      reg_type: input
-      address: 0
-      reg_size: 2
-      format: float
-      test_value: 25.0
-      scale: 0.1
-      truncate: 1
-      sim:
-        type: sine             # sine | ramp | step | random_walk
-        min: 20.0
-        max: 30.0
-        period: 60             # период, сек
-        phase: 0.0             # сдвиг фазы, сек (только sine)
-        # step: 0.5            # шаг блуждания (только random_walk)
-        # values: [10, 20, 30] # список значений для цикла (только step)
-
-    # Holding float с little-endian word order (low word first)
+    # [holding] float, 2 words, little-endian, writable — тест word-swap + запись
     - id: setpoint_float
       reg_type: holding
       address: 2
@@ -57,51 +35,50 @@ tcp_sensor:
       format: float
       test_value: 99.9
       byte_order: little-endian
-      writeable: true
+      scale: 1
+      truncate: 1
+      writeable: 1
 
-    # Writable coil (однобитный регистр)
+    # [holding] uint, 1 word, scale=0.1, event — тест дробного scale + event-публикации
+    - id: counter
+      reg_type: holding
+      address: 4
+      reg_size: 1
+      format: uint
+      test_value: 1000
+      byte_order: big-endian
+      scale: 0.1
+      truncate: 1
+      writeable: 0
+      event: 1
+
+    # [input] float, 2 words, sim:sine — тест динамического обновления
+    - id: temperature
+      reg_type: input
+      address: 0
+      reg_size: 2
+      format: float
+      test_value: 25.0
+      byte_order: big-endian
+      scale: 1
+      truncate: 2
+      writeable: 0
+      sim:
+        type: sine
+        min: 20.0
+        max: 30.0
+        period: 30
+
+    # [coil] bool, writable — тест 1-bit регистра с записью
     - id: output_enable
       reg_type: coil
       address: 0
       test_value: 1
-      writeable: true
+      writeable: 1
 
-    # Discrete input (read-only однобитный регистр)
+    # [discrete] bool, read-only, event — тест 1-bit read-only + event
     - id: fault_flag
       reg_type: discrete
-      address: 0
+      address: 1
       test_value: 0
-
-rtu_controller:
-  port_type: tcp         # RTU-over-TCP: RTU-фрейминг поверх TCP-соединения
-  ip: 127.0.0.1
-  port: 15030
-  slave_id: 10
-  count: 1
-  timeout: 1
-  poll_time: 5
-  registers:
-    - id: control_word
-      reg_type: holding
-      address: 0
-      reg_size: 1
-      format: uint
-      test_value: 500
-
-serial_meter:
-  port_type: serial      # serial RTU через PTY-пару (os.openpty); port не нужен
-  slave_id: 20
-  baud_rate: 9600
-  parity: "N"            # N | E | O
-  data_bits: 8
-  stop_bits: 1
-  count: 1
-  timeout: 1
-  poll_time: 5
-  registers:
-    - id: energy_kwh
-      reg_type: holding
-      address: 0
-      reg_size: 1
-      format: uint
-      test_value: 999
+      event: 1

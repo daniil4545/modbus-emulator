@@ -1,0 +1,257 @@
+# template.example.yaml — справочник полей и примеры устройств
+#
+# Скопируй нужный блок в template.yaml и адаптируй.
+# Запуск: python main.py template.yaml
+
+# ============================================================
+# ПОЛЯ УСТРОЙСТВА
+# ============================================================
+#
+# port_type:  modbus_tcp | tcp (RTU-over-TCP) | serial
+# ip:         IP-адрес (modbus_tcp / tcp)
+# port:       стартовый порт; +i для каждой копии при count > 1
+# slave_id:   стартовый slave_id; +i для каждой копии
+# count:      N копий устройства; имена: name_01..name_N (default: 1)
+# sim_tick:   интервал обновления sim-регистров, сек (default: 1.0)
+# timeout:    таймаут соединения, сек (для драйвера; default: 1)
+# poll_time:  интервал опроса, сек (для драйвера; default: 5)
+# # только для serial:
+# path:       /dev/ttyUSB0 или PTY (подставляет эмулятор)
+# baud_rate:  9600 | 19200 | ...
+# parity:     "N" | "E" | "O"
+# data_bits:  8
+# stop_bits:  1
+
+# ============================================================
+# ПОЛЯ РЕГИСТРА
+# ============================================================
+#
+# id:         идентификатор (для драйвера)
+# reg_type:   holding | input | coil | discrete
+# address:    адрес Modbus (0-based)
+# reg_size:   1 | 2 | 4 — число 16-bit слов (default: 1)
+# format:     int | uint | float   (coil / discrete: не указывать)
+# test_value: начальное значение в datastore эмулятора
+# byte_order: big-endian | little-endian  (reg_size=1: игнорируется)
+# scale:      множитель для драйвера (default: 1)
+# truncate:   знаков после запятой; 0 = без trailing zeros; ~ = без ограничений
+# bit:        0-15 — драйвер извлекает конкретный бит из слова
+# writeable:  1: регистр принимает запись (для драйвера; default: 0)
+# event:      1: драйвер публикует только при изменении значения (default: 0)
+#
+# sim:        динамическая симуляция (обновляется каждые sim_tick сек)
+#   type:     sine | ramp | step | random_walk
+#   min:      нижняя граница
+#   max:      верхняя граница
+#   period:   период, сек
+#   phase:    сдвиг фазы, сек (только sine)
+#   step:     шаг блуждания (только random_walk)
+#   values:   [v1, v2, v3] — цикл значений (только step)
+
+# ============================================================
+# ПРИМЕР 1: modbus_tcp с несколькими копиями
+# ============================================================
+
+modbus_tcp_device:
+  port_type: modbus_tcp
+  ip: 127.0.0.1
+  port: 15020        # копии получат 15020, 15021, 15022
+  slave_id: 1        # копии получат 1, 2, 3
+  count: 3
+  sim_tick: 2.0
+  timeout: 1
+  poll_time: 5
+  registers:
+    - id: setpoint
+      reg_type: holding
+      address: 0
+      reg_size: 1
+      format: uint
+      test_value: 500
+      byte_order: big-endian
+      scale: 0.1
+      truncate: 1
+      writeable: 1
+
+    - id: setpoint_float
+      reg_type: holding
+      address: 2
+      reg_size: 2
+      format: float
+      test_value: 99.9
+      byte_order: little-endian
+      scale: 1
+      truncate: 2
+      writeable: 1
+
+    - id: status_word
+      reg_type: holding
+      address: 4
+      reg_size: 1
+      format: int
+      test_value: 42    # 0b101010 — bit 5 = 1
+      bit: 5            # драйвер извлечёт бит 5
+
+    - id: temperature
+      reg_type: input
+      address: 0
+      reg_size: 2
+      format: float
+      test_value: 25.0
+      byte_order: big-endian
+      truncate: 2
+      sim:
+        type: sine
+        min: 20.0
+        max: 30.0
+        period: 60
+        phase: 0.0
+
+    - id: humidity
+      reg_type: input
+      address: 2
+      reg_size: 1
+      format: uint
+      test_value: 50
+      scale: 0.1
+      truncate: 1
+      event: 1
+      sim:
+        type: ramp
+        min: 30.0
+        max: 90.0
+        period: 120
+
+    - id: output_enable
+      reg_type: coil
+      address: 0
+      test_value: 1
+      writeable: 1
+
+    - id: fault_flag
+      reg_type: discrete
+      address: 0
+      test_value: 0
+      event: 1
+
+# ============================================================
+# ПРИМЕР 2: RTU-over-TCP
+# ============================================================
+
+rtu_over_tcp_device:
+  port_type: tcp     # RTU-фрейминг поверх TCP
+  ip: 127.0.0.1
+  port: 15060
+  slave_id: 10
+  count: 1
+  timeout: 1
+  poll_time: 5
+  registers:
+    - id: control_word
+      reg_type: holding
+      address: 0
+      reg_size: 1
+      format: uint
+      test_value: 500
+      writeable: 1
+
+# ============================================================
+# ПРИМЕР 3: serial RTU (PTY-пара)
+# ============================================================
+
+serial_meter:
+  port_type: serial   # эмулятор создаёт PTY-пару, path подставляется автоматически
+  slave_id: 20
+  baud_rate: 9600
+  parity: "N"
+  data_bits: 8
+  stop_bits: 1
+  count: 1
+  timeout: 1
+  poll_time: 5
+  registers:
+    - id: energy_kwh
+      reg_type: holding
+      address: 0
+      reg_size: 2
+      format: uint
+      test_value: 999
+      byte_order: big-endian
+      scale: 0.01
+      truncate: 2
+
+    - id: power_w
+      reg_type: input
+      address: 0
+      reg_size: 2
+      format: float
+      test_value: 1500.0
+      byte_order: big-endian
+      truncate: 1
+      sim:
+        type: random_walk
+        min: 500.0
+        max: 3000.0
+        step: 50.0
+
+# ============================================================
+# ПРИМЕР 4: все типы sim
+# ============================================================
+
+sim_showcase:
+  port_type: modbus_tcp
+  ip: 127.0.0.1
+  port: 15100
+  slave_id: 99
+  count: 1
+  sim_tick: 1.0
+  timeout: 1
+  poll_time: 5
+  registers:
+    - id: sine_val
+      reg_type: input
+      address: 0
+      reg_size: 2
+      format: float
+      test_value: 0.0
+      sim:
+        type: sine
+        min: -100.0
+        max: 100.0
+        period: 60
+        phase: 0.0
+
+    - id: ramp_val
+      reg_type: input
+      address: 2
+      reg_size: 2
+      format: float
+      test_value: 0.0
+      sim:
+        type: ramp
+        min: 0.0
+        max: 100.0
+        period: 30
+
+    - id: step_val
+      reg_type: input
+      address: 4
+      reg_size: 1
+      format: uint
+      test_value: 10
+      sim:
+        type: step
+        values: [10, 20, 50, 100]
+        period: 5
+
+    - id: walk_val
+      reg_type: input
+      address: 5
+      reg_size: 2
+      format: float
+      test_value: 50.0
+      sim:
+        type: random_walk
+        min: 0.0
+        max: 100.0
+        step: 2.0

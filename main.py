@@ -50,6 +50,10 @@ async def run(template_path: str) -> None:
     finally:
         for fd in setup.master_fds:
             os.close(fd)
+        # Serial threads are daemon=True; closing master_fd signals EOF,
+        # causing serve_forever() to exit. Join them with a timeout.
+        for t in setup.serial_threads:
+            t.join(timeout=2.0)
 
 
 if __name__ == "__main__":

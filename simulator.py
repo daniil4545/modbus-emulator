@@ -56,11 +56,12 @@ async def run_device_sim(
         id(r): [float(r.test_value)] for r in sim_regs
     }
 
-    start = asyncio.get_event_loop().time()
+    loop = asyncio.get_running_loop()
+    start = loop.time()
 
     while True:
         await asyncio.sleep(tick_sec)
-        elapsed = asyncio.get_event_loop().time() - start
+        elapsed = loop.time() - start
 
         for reg in sim_regs:
             state = states[id(reg)]

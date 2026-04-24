@@ -5,6 +5,25 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- `port_type` values updated to match driver format: `modbus tcp` → `modbus_tcp`
+  (backward-compatible — old `modbus tcp` still works via normalization map)
+- `config.py`: `DeviceConfig` gains `timeout` (int, default 1) and `poll_time` (int, default 5)
+  fields — passed through to `devices.yaml` for driver consumption
+- `config.py`: `RegisterConfig` gains `scale` (float, default 1.0), `truncate` (int|None),
+  `writeable` (int 0/1, default 0), `event` (int 0/1, default 0) fields — mirror driver template
+- `template.yaml`: rewritten as focused `test_device` covering all reg_types, formats, byte_order,
+  sim, writeable, event; replaced three-prototype reference with a single minimal driver test config
+- `servers.py`: `ObservableDataBlock` acquires `threading.Lock` in both `setValues` and
+  `sim_setValues` — prevents data races between serial threads and main asyncio loop
+- `servers.py`: serial servers now run in background threads with `asyncio.run` each; previously
+  blocked the main event loop via blocking I/O inside `ModbusSerialServer`
+- `servers.py`: `ServerSetup` gains `serial_threads: list[threading.Thread]` — joined with
+  `timeout=2.0` on shutdown in both `main.py` and `servers.py` standalone entry point
+- `simulator.py`: `asyncio.get_running_loop()` replaces deprecated `asyncio.get_event_loop()`
+- README.md: transport table updated with `modbus_tcp` naming
+
 ## [0.3.0] - 2026-04-03
 
 ### Added

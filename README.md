@@ -50,7 +50,7 @@ go run . --config /path/to/devices_patched.yaml
 
 | `port_type` | Framing | Класс |
 |---|---|---|
-| `modbus tcp` | MBAP | `ModbusTcpServer` + `FramerType.SOCKET` |
+| `modbus_tcp` | MBAP | `ModbusTcpServer` + `FramerType.SOCKET` |
 | `tcp` | RTU-over-TCP | `ModbusTcpServer` + `FramerType.RTU` |
 | `serial` | RTU | `ModbusSerialServer` + PTY |
 

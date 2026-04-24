@@ -31,12 +31,16 @@ class RegisterConfig:
     bit: Optional[int] = None
     sim: Optional[SimConfig] = None
     byte_order: str = "big-endian"  # "big-endian" | "little-endian"
+    scale: float = 1.0              # множитель значения (для драйвера)
+    truncate: Optional[int] = None  # знаков после запятой (для драйвера)
+    writeable: int = 0              # 0/1: признак записываемого регистра (для драйвера)
+    event: int = 0                  # 0/1: публиковать только при изменении (для драйвера)
 
 
 @dataclass
 class DeviceConfig:
     name: str
-    port_type: str                   # "modbus tcp", "tcp", "serial"
+    port_type: str                   # "modbus_tcp", "tcp", "serial"
     slave_id: int
     registers: list[RegisterConfig] = field(default_factory=list)
     ip: Optional[str] = None
@@ -47,6 +51,8 @@ class DeviceConfig:
     data_bits: Optional[int] = None
     stop_bits: Optional[int] = None
     sim_tick: float = 1.0
+    timeout: int = 1                 # таймаут соединения, сек (для драйвера)
+    poll_time: int = 5               # интервал опроса, сек (для драйвера)
 
 
 _REG_TYPE_MAP = {
@@ -54,6 +60,13 @@ _REG_TYPE_MAP = {
     "input": "ir",
     "coil": "co",
     "discrete": "di",
+}
+
+_PORT_TYPE_MAP = {
+    "modbus_tcp": "modbus tcp",  # normalize to internal name
+    "modbus tcp": "modbus tcp",
+    "tcp": "tcp",
+    "serial": "serial",
 }
 
 _STRUCT_FORMATS = {
@@ -75,9 +88,22 @@ def load_config(path: str) -> list[DeviceConfig]:
 
     devices = []
     for name, dev in raw.items():
+        raw_port_type = dev["port_type"]
+        port_type = _PORT_TYPE_MAP.get(raw_port_type)
+        if port_type is None:
+            raise ValueError(f"{name}: unknown port_type '{raw_port_type}'")
+
+        timeout = int(dev.get("timeout", 1))
+        if timeout <= 0:
+            raise ValueError(f"{name}: timeout must be positive, got {timeout}")
+
+        poll_time = int(dev.get("poll_time", 5))
+        if poll_time <= 0:
+            raise ValueError(f"{name}: poll_time must be positive, got {poll_time}")
+
         device = DeviceConfig(
             name=name,
-            port_type=dev["port_type"],
+            port_type=port_type,
             slave_id=dev["slave_id"],
             ip=dev.get("ip"),
             port=dev.get("port"),
@@ -87,6 +113,8 @@ def load_config(path: str) -> list[DeviceConfig]:
             data_bits=dev.get("data_bits"),
             stop_bits=dev.get("stop_bits"),
             sim_tick=float(dev.get("sim_tick", 1.0)),
+            timeout=timeout,
+            poll_time=poll_time,
         )
 
         for reg in dev.get("registers", []):
@@ -113,6 +141,18 @@ def load_config(path: str) -> list[DeviceConfig]:
                     values=list(sim_raw.get("values", [])),
                 )
 
+            _trunc = reg.get("truncate")
+            if _trunc is not None and _trunc != "~":
+                truncate_val = int(_trunc)
+                if truncate_val < 0:
+                    raise ValueError(f"{name}: truncate must be non-negative, got {truncate_val}")
+            else:
+                truncate_val = None
+
+            scale = float(reg.get("scale", 1.0))
+            if scale == 0.0:
+                raise ValueError(f"{name}: scale must not be zero")
+
             device.registers.append(RegisterConfig(
                 reg_type=reg_type,
                 address=reg["address"],
@@ -121,6 +161,10 @@ def load_config(path: str) -> list[DeviceConfig]:
                 format=reg.get("format"),  # None для coil/discrete
                 sim=sim,
                 byte_order=reg.get("byte_order", "big-endian"),
+                scale=scale,
+                truncate=truncate_val,
+                writeable=int(reg.get("writeable", 0)),
+                event=int(reg.get("event", 0)),
             ))
 
         devices.append(device)
