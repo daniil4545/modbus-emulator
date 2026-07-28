@@ -118,11 +118,6 @@ def load_config(path: str) -> list[DeviceConfig]:
         )
 
         for reg in dev.get("registers", []):
-            # Bit-регистры разделяют адрес с raw_word и не имеют своего test_value.
-            # raw_word несёт полное значение слова — его мы и запишем в datastore.
-            if reg.get("bit") is not None:
-                continue
-
             yaml_reg_type = reg["reg_type"]
             reg_type = _REG_TYPE_MAP.get(yaml_reg_type)
             if reg_type is None:
