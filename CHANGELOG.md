@@ -3,10 +3,27 @@
 All notable changes to this project will be documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [0.4.0] - 2026-07-28
+
+### Added
+
+- `tests/`: pytest-тесты `encode_value`, `load_config`, `expand_template`, `compute_next`
+- `.github/workflows/ci.yml`: сборка (`compileall`) и тесты на push и pull request
+- `requirements-dev.txt`: зависимости для тестов
+- README: раздел «Тесты», CI-бейдж, актуализированная структура проекта
+
+### Fixed
+
+- `config.py`: `load_config` пропускал регистр с полем `bit` целиком, включая `test_value`
+  (комментарий предполагал отдельный `raw_word`-регистр, которого в шаблонах нет) — теперь
+  такой регистр инициализируется как обычный, `bit` остаётся полем для драйвера
 
 ### Changed
 
+- `docs/PRD.md`: версия Python приведена в соответствие с README (3.11+)
+- `docs/TASKS.md`: убрана ссылка на несуществующий файл спеки, M5 закрыт по факту ручного
+  тестирования всех транспортов
+- `.gitignore`: убрано игнорирование `docs/` — `PRD.md` и `TASKS.md` в нём трекаются
 - `port_type` values updated to match driver format: `modbus tcp` → `modbus_tcp`
   (backward-compatible — old `modbus tcp` still works via normalization map)
 - `config.py`: `DeviceConfig` gains `timeout` (int, default 1) and `poll_time` (int, default 5)
