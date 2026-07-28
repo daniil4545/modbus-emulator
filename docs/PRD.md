@@ -65,4 +65,4 @@ modbus-emulator/
 
 ## Стек
 
-Python 3.10+, pymodbus 3.9.2, pyserial 3.5
+Python 3.11+, pymodbus 3.9.2, pyserial 3.5
