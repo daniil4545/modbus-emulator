@@ -1,5 +1,7 @@
 # modbus-emulator
 
+[![CI](https://github.com/daniil4545/modbus-emulator/actions/workflows/ci.yml/badge.svg)](https://github.com/daniil4545/modbus-emulator/actions/workflows/ci.yml)
+
 Эмулятор Modbus-устройств для интеграционного тестирования шлюзов и драйверов без железа. Поднимает парк устройств из одного YAML-шаблона: Modbus TCP, RTU-over-TCP и serial RTU через PTY.
 
 Читает `template.yaml`, разворачивает прототипы устройств по полю `count` и запускает Modbus-серверы. Регистры инициализируются из `test_value`, динамические меняются по закону из `sim:`. Написан как тестовый стенд для промышленного шлюза go-modbus2mqtt, но пригоден для любого Modbus-клиента.
@@ -40,6 +42,13 @@ All servers ready. Press Ctrl+C to stop.
 - **Симуляция динамики регистров.** Законы `sine`, `ramp`, `step`, `random_walk` на регистр; клиент видит живые, меняющиеся значения, а не константы.
 - **Патченный конфиг для драйвера.** Пути созданных PTY подставляются в `devices_patched.yaml`; конфиг эмулятора и конфиг драйвера гарантированно согласованы.
 
+## Тесты
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
 ## Транспорты
 
 | `port_type` | Framing | Класс |
@@ -52,13 +61,19 @@ All servers ready. Press Ctrl+C to stop.
 
 ```
 modbus-emulator/
-├── template.yaml   конфиг устройств, редактировать здесь
-├── main.py         точка входа
-├── generator.py    разворачивает template.yaml в devices.yaml
-├── config.py       парсинг YAML, кодирование значений в uint16 words
-├── servers.py      создание серверов, PTY для serial
-├── simulator.py    динамическое обновление регистров (sim:)
-└── requirements.txt
+├── template.yaml          конфиг устройств, редактировать здесь
+├── template.example.yaml  справочник всех полей с примерами
+├── main.py                точка входа
+├── generator.py           разворачивает template.yaml в devices.yaml
+├── config.py              парсинг YAML, кодирование значений в uint16 words
+├── servers.py             создание серверов, PTY для serial
+├── simulator.py           динамическое обновление регистров (sim:)
+├── tests/                 pytest-тесты ключевой логики
+├── requirements.txt
+├── requirements-dev.txt   зависимости для тестов
+├── docs/                  PRD и список задач
+├── CHANGELOG.md
+└── LICENSE
 ```
 
 `devices.yaml` и `devices_patched.yaml` генерируются при каждом запуске, в git не хранятся.
