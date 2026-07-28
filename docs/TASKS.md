@@ -9,16 +9,15 @@
 - [x] `tcp_realistic`: sim-регистры (temperature, rpm, load_pct, fault)
 - [x] Исправлен offset +1 и big-endian word order в `encode_value`
 
-## M5: Ручное тестирование (pending)
+## M5: Ручное тестирование
 
-- [ ] Запустить связку эмулятор + драйвер
-- [ ] Убедиться что `tcp_realistic` меняет значения, статические устройства стабильны
+- [x] Запустить связку эмулятор + драйвер: все три транспорта (`modbus_tcp`, `tcp`,
+      `serial`) проверены живыми Modbus-клиентами, чтение и запись работают
+- [x] Убедиться что sim-регистры меняют значения, статические устройства стабильны
 
 ---
 
 ## v3: Template Generator
-
-Спек: `docs/superpowers/specs/2026-03-31-template-generator-design.md`
 
 ### M6: `generator.py` — Выполнено
 
