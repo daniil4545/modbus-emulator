@@ -10,6 +10,7 @@ dist/
 build/
 
 .claude/
+docs/superpowers/
 
 # Env
 .env
@@ -20,7 +21,6 @@ build/
 
 # Generated at runtime by emulator
 devices.yaml
-devices_patched.yaml
 
 # Test cache
 .pytest_cache/

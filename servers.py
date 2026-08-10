@@ -1,216 +1,283 @@
-"""Создание Modbus-серверов и инициализация регистров из DeviceConfig."""
+"""Создание Modbus-серверов, инициализация регистров и лог трафика."""
 
 from __future__ import annotations
 
 import asyncio
 import os
-import sys
-import threading
-import time
-from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime
 
-import yaml
 from pymodbus import FramerType
-from pymodbus.datastore import ModbusSlaveContext, ModbusSequentialDataBlock, ModbusServerContext
+from pymodbus.datastore import ModbusSequentialDataBlock, ModbusServerContext, ModbusSlaveContext
 from pymodbus.server import ModbusSerialServer, ModbusTcpServer
 
-from config import DeviceConfig, encode_value, load_config
+from config import REG_TYPE_LABELS, DeviceConfig, decode_words, encode_value
 from simulator import run_device_sim
 
+QUIET, NORMAL, VERBOSE = -1, 0, 1
 
-class ObservableDataBlock(ModbusSequentialDataBlock):
-    """DataBlock, логирующий входящие записи через _on_write.
+# function code -> (операция, блок, атрибут PDU со значениями)
+_FUNCTION_CODES = {
+    1: ("read", "co", "bits"),
+    2: ("read", "di", "bits"),
+    3: ("read", "hr", "registers"),
+    4: ("read", "ir", "registers"),
+    5: ("write", "co", "bits"),
+    6: ("write", "hr", "registers"),
+    15: ("write", "co", "bits"),
+    16: ("write", "hr", "registers"),
+}
 
-    _on_write=None во время инициализации — init-записи молчат.
-    Устанавливается после того, как все стартовые значения записаны.
+_EXCEPTION_TEXTS = {
+    1: "illegal function",
+    2: "illegal data address",
+    3: "illegal data value",
+    4: "device failure",
+    0x0A: "gateway path unavailable",
+    0x0B: "gateway target failed to respond",
+}
 
-    Thread-safe: both setValues (Modbus write) and sim_setValues (simulator
-    update) acquire a threading.Lock before mutating the underlying values list,
-    preventing data races when serial server threads and the main asyncio loop
-    write concurrently.
+
+class SlaveContext(ModbusSlaveContext):
+    """ModbusSlaveContext, пробрасывающий наверх код исключения от датаблока.
+
+    Штатный setValues (datastore/context.py:124-133) не возвращает результат вызова
+    блока, поэтому код исключения теряется и FC15/FC16 за границей блока выглядят
+    успешными, хотя запись не произошла. У getValues возврат есть, отсюда и разное
+    поведение чтения и записи.
     """
-    _on_write: Callable[[int, list], None] | None = None
-    _lock: threading.Lock = threading.Lock()
 
-    def __init__(self, address, values):
-        super().__init__(address, values)
+    def setValues(self, fc_as_hex, address, values):
+        return self.store[self.decode(fc_as_hex)].setValues(address + 1, values)
+
+
+class BoundedDataBlock(ModbusSequentialDataBlock):
+    """Блок фиксированного размера, отвечающий ILLEGAL_DATA_ADDRESS за своими границами.
+
+    В pymodbus 3.9.2 у ModbusSequentialDataBlock проверки границ нет: getValues делает
+    срез списка и за пределами блока молча возвращает пустой ответ. Возврат int из
+    getValues/setValues вызывающий код трактует как код исключения
+    (pdu/register_message.py:38, :197).
+    """
+
+    ILLEGAL_ADDRESS = 2
+
+    def _fits(self, address: int, count: int) -> bool:
+        start = address - self.address
+        return start >= 0 and start + count <= len(self.values)
+
+    def getValues(self, address, count=1):
+        if not self._fits(address, count):
+            return self.ILLEGAL_ADDRESS
+        return super().getValues(address, count)
 
     def setValues(self, address, values):
-        with self._lock:
-            super().setValues(address, values)
-        if self._on_write is not None:
-            # ModbusSlaveContext добавляет +1 перед вызовом; вычитаем, чтобы
-            # получить 0-indexed адрес как в devices.yaml.
-            self._on_write(address - 1, values)
-
-    def sim_setValues(self, address, values):
-        """Запись без вызова _on_write. Используется симулятором."""
-        with self._lock:
-            super().setValues(address, values)
+        if not isinstance(values, list):
+            values = [values]
+        if not self._fits(address, len(values)):
+            return self.ILLEGAL_ADDRESS
+        super().setValues(address, values)
+        return None
 
 
 @dataclass
 class ServerSetup:
-    servers: list
-    master_fds: list[int]
-    sim_coroutines: list
-    serial_threads: list[threading.Thread] = field(default_factory=list)
+    servers: dict = field(default_factory=dict)          # имя устройства -> сервер
+    endpoints: dict[str, str] = field(default_factory=dict)
+    master_fds: list[int] = field(default_factory=list)
+    sim_coroutines: list = field(default_factory=list)
+    serial_paths: dict[str, str] = field(default_factory=dict)
 
 
-_BLOCK_LABELS = {"di": "discrete", "co": "coil", "hr": "holding", "ir": "input"}
+def block_sizes(device: DeviceConfig) -> dict[str, int]:
+    """Размер каждого блока по фактически занятым адресам.
+
+    +1 компенсирует инкремент адреса внутри ModbusSlaveContext (datastore/context.py:120),
+    из-за которого ячейка 0 недостижима.
+    """
+    sizes = {"di": 1, "co": 1, "hr": 1, "ir": 1}
+    for reg in device.registers:
+        sizes[reg.reg_type] = max(sizes[reg.reg_type], reg.address + reg.span + 1)
+    return sizes
 
 
-def _build_context(
-    device: DeviceConfig,
-) -> tuple[ModbusServerContext, dict[str, ObservableDataBlock]]:
-    blocks: dict[str, ObservableDataBlock] = {
-        k: ObservableDataBlock(0, [0] * 65536) for k in ("di", "co", "hr", "ir")
-    }
+def build_context(device: DeviceConfig) -> tuple[ModbusServerContext, dict[str, BoundedDataBlock]]:
+    """Создаёт datastore устройства и заполняет его значениями test_value."""
+    sizes = block_sizes(device)
+    blocks = {k: BoundedDataBlock(0, [0] * sizes[k]) for k in ("di", "co", "hr", "ir")}
 
     for reg in device.registers:
         words = encode_value(reg.test_value, reg.format, reg.reg_size, reg.byte_order)
         blocks[reg.reg_type].setValues(reg.address + 1, words)
 
-    # Включаем колбэки после init — выше они были None и не срабатывали
-    for block_type, block in blocks.items():
-        label = _BLOCK_LABELS[block_type]
-        block._on_write = lambda addr, vals, n=device.name, t=label: print(
-            f"[write] {n} [{t}] addr={addr}  values={vals}"
-        )
-
-    store = ModbusSlaveContext(di=blocks["di"], co=blocks["co"], hr=blocks["hr"], ir=blocks["ir"])
-    return ModbusServerContext(slaves=store, single=True), blocks
+    # Все четыре блока передаём всегда: в pymodbus 3.9.2 ModbusSlaveContext.__init__
+    # проверяет наличие co/ir/hr через `if di is not None` (datastore/context.py:96-99).
+    store = SlaveContext(di=blocks["di"], co=blocks["co"], hr=blocks["hr"], ir=blocks["ir"])
+    context = ModbusServerContext(slaves={device.slave_id: store}, single=False)
+    return context, blocks
 
 
-def _make_serial_server(device: DeviceConfig) -> tuple[int, str]:
-    """Creates PTY pair and returns (master_fd, slave_path).
+def _make_tracer(device: DeviceConfig, blocks: dict, verbosity: int):
+    """Колбэк trace_pdu: печатает каждый запрос с именем регистра и значением.
 
-    The actual ModbusSerialServer is created inside the thread's event loop.
+    Запрос печатается на входящем PDU, ошибка — на исходящем: в ответе уже известен
+    exception_code, а в запросе ещё нет.
     """
+    index = {(reg.reg_type, reg.address): reg for reg in device.registers}
+
+    def describe(reg_type: str, address: int, words: list) -> str:
+        label = REG_TYPE_LABELS[reg_type]
+        span = f"{address}..{address + len(words) - 1}" if len(words) > 1 else str(address)
+        reg = index.get((reg_type, address))
+        if reg is not None and len(words) == reg.span:
+            value = decode_words(list(words), reg.format, reg.byte_order)
+            return f"{label} {span} = {value} ({reg.id})"
+        return f"{label} {span} = {list(words)}"
+
+    def log(kind: str, text: str) -> None:
+        stamp = datetime.now().strftime("%H:%M:%S")
+        print(f"{stamp}  {device.name}  {kind:<5}  {text}", flush=True)
+
+    def trace(sending: bool, pdu):
+        if sending:
+            if pdu.isError():
+                reason = _EXCEPTION_TEXTS.get(pdu.exception_code, f"exception {pdu.exception_code}")
+                log("error", reason)
+            return pdu
+
+        # Чужой slave_id остаётся без ответа (ignore_missing_slaves), поэтому
+        # исходящего PDU не будет — единственный шанс сообщить о нём здесь.
+        if pdu.dev_id != device.slave_id:
+            log("error", f"request for slave_id={pdu.dev_id}, this device is {device.slave_id}")
+            return pdu
+
+        entry = _FUNCTION_CODES.get(pdu.function_code)
+        if entry is None:
+            if verbosity >= NORMAL:
+                log("req", f"function code {pdu.function_code}")
+            return pdu
+
+        operation, reg_type, attr = entry
+        if operation == "read":
+            if verbosity < VERBOSE:
+                return pdu
+            words = blocks[reg_type].getValues(pdu.address + 1, pdu.count)
+            if isinstance(words, int):
+                return pdu  # адрес вне блока — причину напечатает ответ с exception_code
+        else:
+            if verbosity < NORMAL:
+                return pdu
+            words = getattr(pdu, attr, [])
+
+        log(operation, describe(reg_type, pdu.address, list(words)))
+        return pdu
+
+    return trace
+
+
+def _open_pty() -> tuple[int, str]:
+    """PTY-пара: сервер слушает master, драйверу отдаётся путь slave."""
     master_fd, slave_fd = os.openpty()
     slave_path = os.ttyname(slave_fd)
     os.close(slave_fd)
     return master_fd, slave_path
 
 
-def _write_patched_config(serial_paths: dict[str, str], source_path: str) -> str:
-    with open(source_path) as f:
-        raw = yaml.safe_load(f)
+async def build_all(devices: list[DeviceConfig], verbosity: int = NORMAL) -> ServerSetup:
+    """Создаёт серверы и sim-корутины. Вызывать из работающего event loop.
 
-    for name, master_path in serial_paths.items():
-        raw[name]["path"] = master_path
-
-    source_dir = os.path.dirname(os.path.abspath(source_path))
-    patched_path = os.path.join(source_dir, "devices_patched.yaml")
-    with open(patched_path, "w") as f:
-        yaml.dump(raw, f, allow_unicode=True, default_flow_style=False)
-
-    return patched_path
-
-
-def build_all(devices: list[DeviceConfig], config_path: str) -> ServerSetup:
-    """Создает все серверы. Для serial-устройств создает PTY-пары и пишет devices_patched.yaml.
-
-    Serial-серверы запускаются в отдельных потоках, т.к. pymodbus использует
-    блокирующий I/O внутри serve_forever(), что блокирует asyncio event loop.
+    Serial-серверы живут в общем event loop наравне с TCP: транспорт pymodbus для
+    serial асинхронный (transport/transport.py:197), отдельные потоки не нужны.
+    ModbusSerialServer.__init__ обращается к asyncio.get_running_loop(), поэтому
+    функция асинхронная.
     """
-    tcp_servers = []
-    master_fds = []
-    sim_coroutines = []
-    serial_paths = {}
-    serial_threads = []
+    setup = ServerSetup()
 
-    for device in devices:
-        if device.port_type == "serial":
-            master_fd, slave_path = _make_serial_server(device)
-            master_fds.append(master_fd)
-            serial_paths[device.name] = slave_path
-            print(f"[serial]     {device.name}  driver_path={slave_path}  slave_id={device.slave_id}")
+    try:
+        for device in devices:
+            context, blocks = build_context(device)
+            tracer = _make_tracer(device, blocks, verbosity)
 
-            # Build context and blocks in main thread
-            context, blocks = _build_context(device)
+            if device.port_type == "serial":
+                master_fd, slave_path = _open_pty()
+                setup.master_fds.append(master_fd)
+                setup.serial_paths[device.name] = slave_path
+                server = ModbusSerialServer(
+                    context,
+                    port=f"/dev/fd/{master_fd}",
+                    framer=FramerType.RTU,
+                    baudrate=device.baud_rate or 9600,
+                    bytesize=device.data_bits or 8,
+                    parity=device.parity or "N",
+                    stopbits=device.stop_bits or 1,
+                    ignore_missing_slaves=True,
+                    trace_pdu=tracer,
+                )
+                endpoint = slave_path
+            else:
+                framer = FramerType.SOCKET if device.port_type == "modbus tcp" else FramerType.RTU
+                server = ModbusTcpServer(
+                    context,
+                    address=(device.ip or "0.0.0.0", device.port),
+                    framer=framer,
+                    ignore_missing_slaves=True,
+                    trace_pdu=tracer,
+                )
+                endpoint = device.endpoint
 
-            # Serial server runs in a background thread with its own event loop
-            # to avoid blocking the main asyncio event loop.
-            # Server must be created inside the coroutine (after event loop starts)
-            # because pymodbus calls asyncio.get_running_loop() in __init__.
-            def _run_serial(
-                ctx=context,
-                mfd=master_fd,
-                dev=device,
-                blks=blocks,
-            ):
-                async def start():
-                    srv = ModbusSerialServer(
-                        ctx,
-                        port=f"/dev/fd/{mfd}",
-                        framer=FramerType.RTU,
-                        baudrate=dev.baud_rate or 9600,
-                        bytesize=dev.data_bits or 8,
-                        parity=dev.parity or "N",
-                        stopbits=dev.stop_bits or 1,
-                    )
-                    await srv.serve_forever()
-                asyncio.run(start())
+            setup.servers[device.name] = server
+            setup.endpoints[device.name] = endpoint
 
-            t = threading.Thread(target=_run_serial, daemon=True, name=device.name)
-            t.start()
-            serial_threads.append(t)
-            time.sleep(0.1)  # let serial server thread open the port
+            if any(reg.sim is not None for reg in device.registers):
+                setup.sim_coroutines.append(
+                    run_device_sim(device.name, device.registers, blocks, device.sim_tick)
+                )
+    except BaseException:
+        # PTY уже открыты, а serve() с их закрытием вызвана не будет
+        _release(setup)
+        raise
 
-        elif device.port_type in ("modbus tcp", "tcp"):
-            if device.port is None:
-                raise ValueError(f"{device.name}: port is required for {device.port_type}")
-            framer = FramerType.SOCKET if device.port_type == "modbus tcp" else FramerType.RTU
-            context, blocks = _build_context(device)
-            server = ModbusTcpServer(
-                context,
-                address=(device.ip or "0.0.0.0", device.port),
-                framer=framer,
-            )
-            print(f"[{device.port_type}]  {device.name}  {device.ip}:{device.port}  slave_id={device.slave_id}")
-            tcp_servers.append(server)
-
-        else:
-            raise ValueError(f"{device.name}: unknown port_type '{device.port_type}'")
-
-        if any(r.sim is not None for r in device.registers):
-            sim_coroutines.append(
-                run_device_sim(device.name, device.registers, blocks, device.sim_tick)
-            )
-
-    patched_path = _write_patched_config(serial_paths, config_path)
-    print("\n[emulator] Run driver with:")
-    print(f"  go run . --config {os.path.abspath(patched_path)}")
-
-    return ServerSetup(
-        servers=tcp_servers,
-        master_fds=master_fds,
-        sim_coroutines=sim_coroutines,
-        serial_threads=serial_threads,
-    )
+    return setup
 
 
-if __name__ == "__main__":
-    config_path = sys.argv[1] if len(sys.argv) > 1 else "devices.yaml"
-    devices = load_config(config_path)
+def _release(setup: ServerSetup) -> None:
+    for coroutine in setup.sim_coroutines:
+        coroutine.close()
+    for fd in setup.master_fds:
+        os.close(fd)
+    setup.sim_coroutines.clear()
+    setup.master_fds.clear()
 
-    async def run():
-        print(f"Building {len(devices)} servers...\n")
-        setup = build_all(devices, config_path)
-        print("\nAll servers ready. Press Ctrl+C to stop.\n")
-        try:
-            await asyncio.gather(
-                *(s.serve_forever() for s in setup.servers),
-                *setup.sim_coroutines,
-            )
-        except asyncio.CancelledError:
-            pass
-        finally:
-            for fd in setup.master_fds:
-                os.close(fd)
-            for t in setup.serial_threads:
-                t.join(timeout=2.0)
 
-    asyncio.run(run())
+async def _listen(name: str, endpoint: str, server) -> None:
+    """Слушает до остановки сервера.
+
+    serve_forever() игнорирует результат listen() (server/base.py:82) и уходит в ожидание
+    future, который при неудачном открытии порта уже некому разрешить — процесс висит
+    молча. Поэтому listen() вызывается здесь, с проверкой результата.
+    """
+    if not await server.listen():
+        raise OSError(f"{name}: cannot open {endpoint}")
+    await server.serving
+
+
+async def serve(setup: ServerSetup) -> None:
+    """Запускает все серверы и симуляции до отмены; на выходе освобождает ресурсы."""
+    tasks = [
+        asyncio.create_task(_listen(name, setup.endpoints[name], server), name=name)
+        for name, server in setup.servers.items()
+    ]
+    tasks += [asyncio.create_task(coroutine) for coroutine in setup.sim_coroutines]
+    setup.sim_coroutines.clear()  # обёрнуты в задачи, повторно закрывать нечего
+
+    try:
+        await asyncio.gather(*tasks)
+    except asyncio.CancelledError:
+        pass
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        for server in setup.servers.values():
+            await server.shutdown()
+        _release(setup)

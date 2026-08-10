@@ -30,12 +30,13 @@
 # reg_type:   holding | input | coil | discrete
 # address:    адрес Modbus (0-based)
 # reg_size:   1 | 2 | 4 — число 16-bit слов (default: 1)
-# format:     int | uint | float   (coil / discrete: не указывать)
+# format:     int | uint | float   (coil / discrete: не указывать; с bit: только bool)
 # test_value: начальное значение в datastore эмулятора
 # byte_order: big-endian | little-endian  (reg_size=1: игнорируется)
 # scale:      множитель для драйвера (default: 1)
 # truncate:   знаков после запятой; 0 = без trailing zeros; ~ = без ограничений
-# bit:        0-15 — драйвер извлекает конкретный бит из слова
+# bit:        0-15 — драйвер извлекает конкретный бит из слова; требует format: bool,
+#             в datastore эмулятора при этом ложится всё слово из test_value
 # writeable:  1: регистр принимает запись (для драйвера; default: 0)
 # event:      1: драйвер публикует только при изменении значения (default: 0)
 #
@@ -87,10 +88,9 @@ modbus_tcp_device:
     - id: status_word
       reg_type: holding
       address: 4
-      reg_size: 1
-      format: int
-      test_value: 42    # 0b101010 — bit 5 = 1
-      bit: 5            # драйвер извлечёт бит 5
+      format: bool      # bit работает только с format: bool — иначе драйвер сбросит bit
+      test_value: 42    # 0b101010 — в datastore ложится всё слово
+      bit: 5            # драйвер извлечёт бит 5 (= 1)
 
     - id: temperature
       reg_type: input

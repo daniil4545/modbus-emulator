@@ -4,7 +4,7 @@
 
 Эмулятор Modbus-устройств для интеграционного тестирования шлюзов и драйверов без железа. Поднимает парк устройств из одного YAML-шаблона: Modbus TCP, RTU-over-TCP и serial RTU через PTY.
 
-Читает `template.yaml`, разворачивает прототипы устройств по полю `count` и запускает Modbus-серверы. Регистры инициализируются из `test_value`, динамические меняются по закону из `sim:`. Написан как тестовый стенд для промышленного шлюза go-modbus2mqtt, но пригоден для любого Modbus-клиента.
+Читает `template.yaml`, разворачивает прототипы по полю `count` и запускает серверы. Регистры инициализируются из `test_value`, динамические меняются по закону из `sim:`. Рядом кладётся `devices.yaml` — тот же конфиг с подставленными путями PTY, его и получает драйвер. Написан как стенд для шлюза go-modbus2mqtt, но пригоден для любого Modbus-клиента.
 
 ## Быстрый старт
 
@@ -16,38 +16,46 @@ pip install -r requirements.txt
 python main.py
 ```
 
-Устройства описываются в `template.yaml`; файл содержит все доступные поля с комментариями. При запуске эмулятор печатает список серверов и готовую команду для драйвера:
+Устройства описываются в `template.yaml`. Справочник всех полей с примерами — `template.example.yaml`. Поле `count: N` создаёт N копий прототипа с инкрементом `port` и `slave_id`.
+
+## Проверка конфига
+
+```bash
+python main.py --check
+```
+
+Разворачивает `count`, проверяет конфиг и печатает карту: что и по каким адресам окажется в datastore, в какие слова закодировано каждое `test_value`. Серверы не поднимаются.
+
+## Запуск
 
 ```
-[generator] Expanded 4 devices → /path/to/devices.yaml
-[modbus tcp]  tcp_sensor_01  127.0.0.1:15020  slave_id=1
-[modbus tcp]  tcp_sensor_02  127.0.0.1:15021  slave_id=2
-[tcp]         rtu_controller  127.0.0.1:15030  slave_id=10
-[serial]      serial_meter  driver_path=/dev/pts/3  slave_id=20
+[emulator] 2 devices from template.yaml
 
-[emulator] Run driver with:
-  go run . --config /path/to/devices_patched.yaml
+  modbus tcp  tcp_sensor           127.0.0.1:15620        slave_id=1    5 registers
+  serial      serial_meter         /dev/ttys000           slave_id=20   1 registers
+
+[emulator] driver config written to /path/to/devices.yaml
+  go run . --config /path/to/devices.yaml
 
 All servers ready. Press Ctrl+C to stop.
 ```
 
-Драйвер запускается в отдельном терминале командой из вывода.
+## Лог трафика
 
-## Инженерные решения
+Каждый запрос печатается с именем регистра из поля `id` и декодированным значением:
 
-- **PTY-эмуляция serial.** Для `port_type: serial` создаётся псевдотерминальная пара через `os.openpty()`; драйвер получает путь настоящего терминального устройства и работает с RTU-портом как с железным, без USB-адаптеров и проводов.
-- **Генератор парка из шаблона.** Поле `count: N` разворачивает прототип в N устройств с инкрементом порта и `slave_id`; сто однотипных датчиков описываются пятью строками.
-- **Потокобезопасный datastore.** Записи Modbus-клиента и обновления симулятора идут из разных потоков; `ObservableDataBlock` сериализует их через `threading.Lock`, обновления симулятора не триггерят write-колбэк.
-- **Serial-серверы в отдельных потоках.** `pymodbus` блокирует event loop в `serve_forever()` для serial; каждый serial-сервер живёт в своём потоке со своим event loop, TCP-серверы остаются в основном asyncio-цикле.
-- **Симуляция динамики регистров.** Законы `sine`, `ramp`, `step`, `random_walk` на регистр; клиент видит живые, меняющиеся значения, а не константы.
-- **Патченный конфиг для драйвера.** Пути созданных PTY подставляются в `devices_patched.yaml`; конфиг эмулятора и конфиг драйвера гарантированно согласованы.
-
-## Тесты
-
-```bash
-pip install -r requirements-dev.txt
-pytest
 ```
+23:03:24  tcp_sensor  read   holding 0 = 42 (status_word)
+23:03:24  tcp_sensor  write  holding 4 = 500 (counter)
+23:03:24  tcp_sensor  error  illegal data address
+23:03:24  tcp_sensor  error  request for slave_id=99, this device is 1
+```
+
+| Флаг | Что в логе |
+|---|---|
+| `-q` | только ошибки |
+| (без флага) | записи и ошибки |
+| `-v` | плюс чтения |
 
 ## Транспорты
 
@@ -55,32 +63,43 @@ pytest
 |---|---|---|
 | `modbus_tcp` | MBAP | `ModbusTcpServer` + `FramerType.SOCKET` |
 | `tcp` | RTU-over-TCP | `ModbusTcpServer` + `FramerType.RTU` |
-| `serial` | RTU | `ModbusSerialServer` + PTY |
+| `serial` | RTU | `ModbusSerialServer` + PTY-пара |
+
+Для `serial` эмулятор создаёт PTY-пару: сервер слушает master, драйверу отдаётся путь slave. Путь подставляется в `devices.yaml` автоматически.
+
+## Поведение устройства
+
+- Отвечает только на свой `slave_id`; запрос к чужому остаётся без ответа, как на реальной шине, и отмечается в логе
+- Datastore выделяется по объявленным адресам; чтение или любая запись за их пределами возвращает `ILLEGAL_DATA_ADDRESS`, включая множественную запись, частично выходящую за границу блока
+- Регистр с `bit` кладёт в datastore слово целиком — бит из него извлекает драйвер; такой регистр требует `format: bool`
+- Если порт занят или конфиг некорректен, эмулятор выходит с кодом 1 и сообщением, а не зависает
 
 ## Структура проекта
 
 ```
-modbus-emulator/
-├── template.yaml          конфиг устройств, редактировать здесь
-├── template.example.yaml  справочник всех полей с примерами
-├── main.py                точка входа
-├── generator.py           разворачивает template.yaml в devices.yaml
-├── config.py              парсинг YAML, кодирование значений в uint16 words
-├── servers.py             создание серверов, PTY для serial
-├── simulator.py           динамическое обновление регистров (sim:)
-├── tests/                 pytest-тесты ключевой логики
-├── requirements.txt
-├── requirements-dev.txt   зависимости для тестов
-├── docs/                  PRD и список задач
-├── CHANGELOG.md
-└── LICENSE
+main.py                 CLI, стартовая таблица, --check
+generator.py            разворот count
+config.py               разбор и валидация конфига, кодирование значений
+servers.py              серверы, datastore, PTY, лог трафика
+simulator.py            динамическое обновление регистров (sim:)
+template.yaml           конфиг устройств
+template.example.yaml   справочник полей и примеры
+tests/                  pytest-тесты
+docs/                   PRD, backlog, состояние проекта
 ```
 
-`devices.yaml` и `devices_patched.yaml` генерируются при каждом запуске, в git не хранятся.
+`devices.yaml` генерируется при каждом запуске, в git не хранится.
+
+## Тесты
+
+```bash
+pip install -r requirements-dev.txt
+pytest -q
+```
 
 ## Стек
 
-Python 3.11+, pymodbus, PyYAML, asyncio.
+Python 3.11+, pymodbus 3.9.2, pyserial, PyYAML, asyncio.
 
 ## Лицензия
 

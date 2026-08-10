@@ -5,36 +5,55 @@
 Эмулятор Modbus-устройств для тестирования шлюза go-modbus2mqtt.
 Запускает серверы из YAML-конфига, инициализирует регистры из `test_value`.
 
+## Конфиг
+
+Схема совпадает со схемой `Device` / `Register` из `go-modbus2mqtt/config_yaml.go` плюс
+четыре поля эмулятора: `test_value`, `sim`, `sim_tick`, `count`. Драйвер парсит YAML без
+`KnownFields`, поэтому лишние поля игнорирует — один файл обслуживает обе стороны.
+
+Эмулятор читает:
+```
+port_type, ip, port, slave_id, sim_tick, count
+path, baud_rate, parity, data_bits, stop_bits    # только serial
+registers[].id, reg_type, address, reg_size, format, bit, byte_order, test_value, sim
+```
+Поля `scale`, `truncate`, `writeable`, `event`, `timeout`, `poll_time` эмулятор не
+использует — они уезжают в сгенерированный `devices.yaml` как есть.
+
+`template.yaml` разворачивается по `count` в `devices.yaml`; для serial-устройств туда
+подставляется путь PTY. `devices.yaml` генерируется при каждом запуске.
+
 ## Транспорты
 
 | `port_type` | pymodbus класс | Framer |
 |---|---|---|
-| `modbus tcp` | `ModbusTcpServer` | `FramerType.SOCKET` |
+| `modbus_tcp` | `ModbusTcpServer` | `FramerType.SOCKET` |
 | `tcp` | `ModbusTcpServer` | `FramerType.RTU` (RTU-over-TCP) |
 | `serial` | `ModbusSerialServer` | `FramerType.RTU` + `os.openpty()` |
 
-## Конфиг (`devices.yaml`)
+Все серверы, включая serial, работают в одном event loop.
 
-Поля, которые читает эмулятор:
-```
-port_type, ip, port, slave_id
-path, baud_rate, parity, data_bits, stop_bits   # только serial
-registers[].reg_type, address, reg_size, format, bit, test_value, sim
-```
-Остальные поля (id, writeable и др.) передаются в файл без изменений и читаются драйвером.
+## Кодирование test_value
 
-## Кодирование test_value → uint16 words
+Правило выбирается по `reg_type`:
 
-При записи в datablock: `block.setValues(address + 1, words)` (+1 компенсирует внутренний offset `ModbusSlaveContext`).
+| условие | что попадает в datastore |
+|---|---|
+| `coil` / `discrete` | один бит, `int(bool(v))` |
+| `holding` / `input`, задан `bit` | всё слово как uint16 (бит извлекает драйвер) |
+| `holding` / `input`, без `bit` | по `format` + `reg_size` |
 
 | format | reg_size | struct |
 |---|---|---|
 | uint | 1 / 2 / 4 | `>H` / `>I` / `>Q` |
 | int | 1 / 2 / 4 | `>h` / `>i` / `>q` |
 | float | 2 / 4 | `>f` / `>d` |
-| coil / discrete | — | `bool(v)` |
 
-`byte_order` (на уровне регистра): `"big-endian"` (дефолт, high word first) | `"little-endian"` (word-swap — reversed uint16 list). Для `reg_size=1` и coil/discrete игнорируется.
+`byte_order`: `big-endian` (дефолт, high word first) или `little-endian` (word-swap).
+Для `reg_size=1` и coil/discrete игнорируется.
+
+Запись в блок идёт по адресу `address + 1` — компенсация инкремента внутри
+`ModbusSlaveContext` (`datastore/context.py:120`).
 
 ## Симуляция (поле `sim:`)
 
@@ -47,22 +66,13 @@ registers[].reg_type, address, reg_size, format, bit, test_value, sim
 | `step` | `values` (список), `period` | циклический перебор |
 | `random_walk` | `min`, `max`, `step` | случайное блуждание |
 
-## Структура файлов (v3)
+## Поведение устройства
 
-```
-modbus-emulator/
-├── main.py          # точка входа: generator → config → servers
-├── generator.py     # template.yaml → devices.yaml (expand count)
-├── config.py        # парсинг devices.yaml → [DeviceConfig]
-├── servers.py       # ModbusTcpServer / ModbusSerialServer + PTY + devices_patched.yaml
-├── simulator.py     # фоновые корутины sim-регистров
-├── template.yaml    # пользовательский конфиг (редактируется)
-├── requirements.txt # pymodbus==3.9.2, pyserial==3.5
-└── docs/
-```
-
-Генерируемые (gitignore): `devices.yaml`, `devices_patched.yaml`.
+- Отвечает только на свой `slave_id`; запрос к чужому остаётся без ответа
+- Блок datastore выделяется по объявленным адресам; выход за границы возвращает
+  `ILLEGAL_DATA_ADDRESS`
+- Регистр с `bit` требует `format: bool` — иначе драйвер сбрасывает `bit`
 
 ## Стек
 
-Python 3.11+, pymodbus 3.9.2, pyserial 3.5
+Python 3.11+, pymodbus 3.9.2, pyserial 3.5, PyYAML 6.0.3

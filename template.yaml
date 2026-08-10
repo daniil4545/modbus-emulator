@@ -15,7 +15,6 @@ test_device:
   registers:
 
     # [holding] int, 1 word, big-endian — baseline
-    # bit: 5 → бит 5 = 1 (42 = 0b101010), тест bit-extraction на стороне драйвера
     - id: status_word
       reg_type: holding
       address: 0
@@ -51,6 +50,14 @@ test_device:
       truncate: 1
       writeable: 0
       event: 1
+
+    # [holding] bit-регистр — в datastore ложится всё слово, бит 5 извлекает драйвер
+    - id: status_bit
+      reg_type: holding
+      address: 6
+      format: bool
+      test_value: 42      # 0b101010 — бит 5 = 1
+      bit: 5
 
     # [input] float, 2 words, sim:sine — тест динамического обновления
     - id: temperature

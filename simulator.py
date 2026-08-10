@@ -44,17 +44,14 @@ async def run_device_sim(
 ) -> None:
     """Фоновая корутина: обновляет регистры с sim: каждые tick_sec секунд.
 
-    blocks — словарь {"hr": ObservableDataBlock, ...}; используется метод
-    sim_setValues, который записывает значение без активации колбэка записи.
+    blocks — словарь {"hr": ModbusSequentialDataBlock, ...} из build_context.
     """
     sim_regs = [r for r in registers if r.sim is not None]
     if not sim_regs:
         return
 
     # Начальное состояние для random_walk — берётся из test_value каждого регистра
-    states: dict[int, list[float]] = {
-        id(r): [float(r.test_value)] for r in sim_regs
-    }
+    states = [[float(r.test_value)] for r in sim_regs]
 
     loop = asyncio.get_running_loop()
     start = loop.time()
@@ -63,8 +60,7 @@ async def run_device_sim(
         await asyncio.sleep(tick_sec)
         elapsed = loop.time() - start
 
-        for reg in sim_regs:
-            state = states[id(reg)]
+        for reg, state in zip(sim_regs, states):
             raw = compute_next(reg.sim, elapsed, state)
 
             # Привести тип к ожидаемому encode_value:
@@ -77,4 +73,4 @@ async def run_device_sim(
                 value = raw
 
             words = encode_value(value, reg.format, reg.reg_size, reg.byte_order)
-            blocks[reg.reg_type].sim_setValues(reg.address + 1, words)
+            blocks[reg.reg_type].setValues(reg.address + 1, words)

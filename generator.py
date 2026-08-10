@@ -1,4 +1,4 @@
-"""Разворачивает template.yaml в dict, совместимый с devices.yaml.
+"""Разворачивает template.yaml в словарь устройств формата go-modbus2mqtt.
 
 Публичный интерфейс:
     expand_template(template_path) -> dict
@@ -8,8 +8,6 @@
 from __future__ import annotations
 
 import copy
-import sys
-from pathlib import Path
 
 import yaml
 
@@ -23,51 +21,43 @@ def expand_template(template_path: str) -> dict:
       port инкрементируется на i (только если поле port есть в прототипе),
       slave_id инкрементируется на i
 
-    Args:
-        template_path: путь к template.yaml
-
     Returns:
         dict вида {device_name: device_dict, ...} без поля count —
-        готов к передаче в save_devices или load_config
+        готов к передаче в save_devices или parse_devices
     """
     with open(template_path) as f:
         raw = yaml.safe_load(f)
 
+    if not raw:
+        raise ValueError(f"{template_path}: template is empty")
+
     result: dict = {}
 
     for name, proto in raw.items():
-        count = proto.pop("count", 1)
+        if not isinstance(proto, dict):
+            raise ValueError(f"{name}: device block is empty")
 
-        if count == 1:
-            result[name] = copy.deepcopy(proto)
-        else:
-            for i in range(count):
-                copy_name = f"{name}_{i+1:02d}"
-                device = copy.deepcopy(proto)
-                if "port" in proto:
-                    device["port"] = proto["port"] + i
-                device["slave_id"] = proto["slave_id"] + i
-                result[copy_name] = device
+        count = proto.get("count", 1)
+        if not isinstance(count, int) or count < 1:
+            raise ValueError(f"{name}: count must be a positive int, got {count!r}")
+
+        for i in range(count):
+            device = copy.deepcopy(proto)
+            device.pop("count", None)
+
+            if count == 1:
+                result[name] = device
+                continue
+
+            if "port" in proto:
+                device["port"] = proto["port"] + i
+            device["slave_id"] = proto.get("slave_id", 1) + i
+            result[f"{name}_{i + 1:02d}"] = device
 
     return result
 
 
 def save_devices(expanded: dict, output_path: str) -> None:
-    """Сериализует развёрнутый dict в YAML-файл и печатает подтверждение.
-
-    Args:
-        expanded:    результат expand_template()
-        output_path: путь для записи (создаёт файл или перезаписывает существующий)
-    """
+    """Сериализует развёрнутый словарь в YAML-файл для драйвера."""
     with open(output_path, "w") as f:
         yaml.dump(expanded, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
-    print(f"[generator] Expanded {len(expanded)} devices → {output_path}")
-
-
-if __name__ == "__main__":
-    template_path = sys.argv[1] if len(sys.argv) > 1 else "template.yaml"
-    output_path = sys.argv[2] if len(sys.argv) > 2 else str(Path(template_path).parent / "devices.yaml")
-
-    expanded = expand_template(template_path)
-    print(yaml.dump(expanded, allow_unicode=True, default_flow_style=False, sort_keys=False))
-    save_devices(expanded, output_path)
